@@ -41,6 +41,11 @@
       "sourceType": "local",
       "computedHash": "896614b46a0a513ef9f3b1662cd9e64f96178a8611946c8977c9dd30d72af7a7"
     },
+    "hyperswarm144": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "a17aea2d4ae21d276a06d9ab74794180077f1244054ff40436b982c3780f0fc2"
+    },
     "self-optimizing-meta-loop": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
