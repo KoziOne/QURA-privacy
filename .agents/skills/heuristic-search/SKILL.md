@@ -304,6 +304,37 @@ class ParetoFrontier {
 }
 ```
 
+## Cost Algebra Pattern
+
+Costs are not just numbers — they form an **algebra** with binary combination and scalar scaling. This enables domain-agnostic cost accumulation over any comparable type.
+
+```javascript
+// Cost algebra: three operations over any Comparable type
+class CostAlgebra {
+  constructor({ zero, combine, scale }) {
+    this.zero = zero;          // Identity element
+    this.combine = combine;    // (C, C) → C  (accumulate path cost)
+    this.scale = scale;        // (C, number) → C  (weight heuristic, e.g. AD*)
+  }
+}
+
+// Standard numeric algebra
+const numericCost = new CostAlgebra({
+  zero: 0,
+  combine: (a, b) => a + b,
+  scale: (a, factor) => a * factor
+});
+
+// Vector cost algebra (for multiobjective)
+const vectorCost = new CostAlgebra({
+  zero: [0, 0, 0],
+  combine: (a, b) => a.map((v, i) => v + b[i]),
+  scale: (a, factor) => a.map(v => v * factor)
+});
+```
+
+**Key insight**: algorithms use `algebra.combine(currentCost, transitionCost)` instead of `+`. This decouples cost types from algorithm logic — same A* code works for scalars, vectors, or custom types.
+
 ## Cost Function Patterns
 
 | Pattern | Formula | Use Case |
@@ -312,6 +343,91 @@ class ParetoFrontier {
 | **Weighted** | `cost(t) = t.weight` | Standard shortest path |
 | **Composite** | `cost(t) = w₁·f₁(t) + w₂·f₂(t)` | Weighted multi-criteria |
 | **Dynamic** | `cost(t) = f(t, context)` | Context-dependent (AD*) |
+| **Algebraic** | `cost = algebra.combine(parent.cost, edge)` | Any comparable type via CostAlgebra |
+
+## Simulated Annealing
+
+Probabilistic local search that accepts worse solutions with decreasing probability — escapes local optima.
+
+```javascript
+class SimulatedAnnealingIterator {
+  constructor(initialNode, expander, evaluator, { T0 = 1000, cooling = 0.995, Tmin = 0.01 }) {
+    this.current = initialNode;
+    this.current.score = evaluator.evaluate(initialNode.state);
+    this.best = this.current;
+    this.expander = expander;
+    this.evaluator = evaluator;
+    this.T = T0;           // Current temperature
+    this.cooling = cooling; // Cooling rate
+    this.Tmin = Tmin;      // Minimum temperature (frozen)
+  }
+
+  next() {
+    // Pick a random neighbor
+    const successors = [...this.expander.successorsOf(this.current.state)];
+    const transition = successors[Math.floor(Math.random() * successors.length)];
+    const candidate = this.expander.makeNode(this.current, transition);
+    candidate.score = this.evaluator.evaluate(candidate.state);
+
+    const delta = candidate.score - this.current.score;
+
+    // Accept if better, or probabilistically if worse (Metropolis criterion)
+    if (delta > 0 || Math.random() < Math.exp(delta / this.T)) {
+      this.current = candidate;
+      if (candidate.score > this.best.score) this.best = candidate;
+    }
+
+    this.T *= this.cooling;  // Cool down
+    return { node: this.current, best: this.best, temperature: this.T, frozen: this.T < this.Tmin };
+  }
+}
+```
+
+| Parameter | Effect | Tuning |
+|-----------|--------|--------|
+| `T0` (initial temp) | Higher = more exploration early | Set so ~80% of worse moves accepted initially |
+| `cooling` | Closer to 1 = slower cooling | 0.99-0.999 for thorough search, 0.9-0.95 for fast |
+| `Tmin` | When to stop | When acceptance probability is negligible |
+
+## Multiobjective Label-Setting
+
+Unlike single-objective search (one best node per state), multiobjective keeps **all non-dominated nodes per state**.
+
+```javascript
+class MultiobjLabelSetting extends SearchIterator {
+  constructor(initialNode, expander) {
+    super(initialNode, expander);
+    this.labels = new Map();  // state → Set<Node> (non-dominated set)
+  }
+
+  next() {
+    const current = this.frontier.remove();
+
+    for (const transition of this.expander.successorsOf(current.state)) {
+      const child = this.expander.makeNode(current, transition);
+      const state = child.state;
+
+      if (!this.labels.has(state)) this.labels.set(state, new Set());
+      const existing = this.labels.get(state);
+
+      // Check if dominated by any existing label
+      if ([...existing].some(n => dominates(n.cost, child.cost))) continue;
+
+      // Remove labels dominated by new node
+      for (const n of existing) {
+        if (dominates(child.cost, n.cost)) existing.delete(n);
+      }
+
+      existing.add(child);
+      this.frontier.add(child);
+    }
+
+    return current;
+  }
+}
+```
+
+**Returns multiple goal nodes** — one per Pareto-optimal path. Caller extracts the full frontier.
 
 ## State Reconstruction
 

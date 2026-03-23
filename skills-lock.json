@@ -24,7 +24,7 @@
     "heuristic-search": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
-      "computedHash": "bc1006777a42d5849c6feea4232439e5c84a95b9238e39eb33fd939dfa3de29c"
+      "computedHash": "227b82614344c9bd472872052dea6783b2c3361b4b44daec37146488a3bcafff"
     },
     "evolutionary-optimization": {
       "source": "QURA-privacy/skills",
