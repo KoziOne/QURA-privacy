@@ -179,33 +179,156 @@ function reciprocalRankFusion(resultSets, k, constant = 60) {
 }
 ```
 
-## Memory Architecture (Episodic / Semantic / Procedural)
+## Memory Architecture (Three Zones + ACT-R Decay)
 
-| Type | What It Stores | How It's Used | Retention |
-|------|---------------|---------------|-----------|
-| **Episodic** | Interaction transcripts, events, context | "What happened in our last conversation?" | Time-decaying, summarized |
-| **Semantic** | Facts, lessons, corrections, knowledge | "What do I know about X?" | Persistent, versioned |
-| **Procedural** | Learned workflows, tool patterns, preferences | "How does the user prefer X to be done?" | Persistent, reinforced |
+From Ori-Mnemos — memory zones with differentiated decay rates, modeled on human cognition.
+
+| Zone | Decay Rate | What It Stores | Behavior |
+|------|-----------|---------------|----------|
+| **Self** (identity) | 0.1x (barely fades) | Agent name, personality, goals, methodology | Near-permanent |
+| **Notes** (knowledge) | 1.0x (lives by relevance) | Main knowledge graph, facts, lessons | Fades if unused |
+| **Ops** (operations) | 3.0x (burns hot) | Session logs, reminders, daily status | Rapid expiry |
 
 ```javascript
-class TripartiteMemory {
+class ZonedMemory {
   constructor() {
-    this.episodic = new EpisodicStore();   // Time-indexed interactions
-    this.semantic = new SemanticStore();    // Knowledge facts with provenance
-    this.procedural = new ProceduralStore(); // Learned behaviors
+    this.zones = {
+      self: { decayRate: 0.1, store: new MarkdownStore('self/') },
+      notes: { decayRate: 1.0, store: new MarkdownStore('notes/') },
+      ops: { decayRate: 3.0, store: new MarkdownStore('ops/') }
+    };
   }
 
-  // Episodic: auto-summarize old conversations to save space
+  // ACT-R activation decay: vitality = base + sum(t_i^-d)
+  // Each access boosts activation; unused items decay naturally
+  getVitality(item) {
+    const d = this.zones[item.zone].decayRate;
+    const base = item.baseActivation;
+    const accessBoost = item.accessTimes.reduce((sum, t) =>
+      sum + Math.pow((Date.now() - t) / 86400000, -d), 0
+    );
+    return base + accessBoost;
+  }
+
+  // Auto-consolidate: summarize old episodic items into semantic notes
   async consolidate() {
-    const old = await this.episodic.olderThan(days(30));
-    for (const episode of old) {
-      const summary = await summarize(episode);
-      await this.semantic.store(summary, { source: 'episodic_consolidation' });
-      await this.episodic.archive(episode.id);
+    const fading = await this.zones.ops.store.getAll()
+      .filter(item => this.getVitality(item) < 0.1);
+
+    for (const item of fading) {
+      const summary = await summarize(item);
+      await this.zones.notes.store.add(summary, { source: 'consolidation' });
+      await this.zones.ops.store.archive(item.id);
     }
   }
 }
 ```
+
+**Storage**: plain Markdown files on disk — git-friendly, human-readable, no vendor lock-in, portable across machines.
+
+## Self-Improving Retrieval (Q-Value + Hebbian + Bandit)
+
+From Ori-Mnemos — retrieval quality improves with use through three learning layers.
+
+```javascript
+class SelfImprovingRetrieval {
+  constructor() {
+    this.qValues = new Map();     // note → quality score (EMA)
+    this.hebbianEdges = new Map(); // (note, note) → association strength
+    this.bandit = new LinUCB();   // Learns which retrieval stages to use
+  }
+
+  // Layer 1: Q-Value Reranking — notes earn quality through use
+  updateQValue(noteId, signal) {
+    const rewards = {
+      forward_citation: 1.0,   // Another note links to this one
+      update: 0.5,             // User edited/updated this note
+      downstream_creation: 0.6, // Note led to new knowledge
+      re_recall: 0.4,          // Retrieved again in different context
+      dead_end: -0.15          // Retrieved but not useful
+    };
+
+    const reward = rewards[signal] || 0;
+    const alpha = 0.3;  // EMA smoothing
+    const current = this.qValues.get(noteId) || 0;
+    this.qValues.set(noteId, current + alpha * (reward - current));
+  }
+
+  // Layer 2: Hebbian Co-Occurrence — notes retrieved together grow edges
+  recordCoOccurrence(noteIds) {
+    for (let i = 0; i < noteIds.length; i++) {
+      for (let j = i + 1; j < noteIds.length; j++) {
+        const key = `${noteIds[i]}:${noteIds[j]}`;
+        const current = this.hebbianEdges.get(key) || 0;
+        // NPMI normalization prevents hub dominance
+        const npmi = this.normalizedPMI(noteIds[i], noteIds[j]);
+        this.hebbianEdges.set(key, current + npmi * 0.1);
+
+        // Turrigiano homeostasis: prevent any node from dominating
+        this.homeostasis(noteIds[i]);
+        this.homeostasis(noteIds[j]);
+      }
+    }
+  }
+
+  // Layer 3: Stage Meta-Learning — bandit learns optimal retrieval strategy
+  async retrieve(query) {
+    const stages = ['semantic', 'bm25', 'pagerank', 'associative'];
+    const context = this.extractQueryFeatures(query);
+
+    // Bandit selects which stages to run for this query type
+    const selectedStages = this.bandit.select(context, stages);
+
+    const results = await Promise.all(
+      selectedStages.map(stage => this.runStage(stage, query))
+    );
+
+    // Four-signal fusion with Q-value reranking
+    const fused = this.reciprocalRankFusion(results);
+    const reranked = fused.sort((a, b) =>
+      (this.qValues.get(b.id) || 0) - (this.qValues.get(a.id) || 0)
+    );
+
+    // Update bandit with retrieval quality signal
+    const reward = await this.measureRetrievalQuality(reranked, query);
+    this.bandit.update(context, selectedStages, reward);
+
+    return reranked;
+  }
+}
+```
+
+**Performance vs naive retrieval** (Ori-Mnemos benchmarks): 3.1x recall, 2.1x F1, 9.5x faster, 91-99.9% token savings at scale.
+
+## Model Souping (Checkpoint Aggregation)
+
+From EngGPT2 — aggregate multiple fine-tuned checkpoints to blend complementary behaviors.
+
+```javascript
+// Instead of picking the "best" checkpoint, average them
+async function modelSoup(checkpoints, anchorCheckpoint, weights = null) {
+  const w = weights || Array(checkpoints.length).fill(1 / checkpoints.length);
+
+  // Use SFT checkpoint as anchor to prevent drift
+  const anchorParams = await loadParams(anchorCheckpoint);
+  const soupedParams = {};
+
+  for (const key of Object.keys(anchorParams)) {
+    soupedParams[key] = new Float32Array(anchorParams[key].length).fill(0);
+
+    for (let i = 0; i < checkpoints.length; i++) {
+      const params = await loadParams(checkpoints[i]);
+      for (let j = 0; j < params[key].length; j++) {
+        soupedParams[key][j] += w[i] * params[key][j];
+      }
+    }
+  }
+
+  return soupedParams;
+}
+```
+
+**Key insight**: different training runs specialize in different behaviors. Averaging them produces a model with broader capability than any single checkpoint — no extra training compute.
 
 ## Knowledge Graph with Temporal Provenance
 
