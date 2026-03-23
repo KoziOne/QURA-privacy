@@ -533,25 +533,278 @@ registry.register('IProblem', rastriginProblem);
 | **Permutation** | `[3,1,4,2,5]` | Swap, inversion, order crossover | TSP, scheduling |
 | **Tree** | Expression tree | Subtree crossover/mutation | GP, symbolic regression |
 | **Integer** | `[5, 2, 8, 1]` | Random reset, uniform crossover | Combinatorial |
+| **Linear Linkage** | `[0,1,2,2,4]` | Cluster merge/split | Grouping, clustering |
+| **Schedule** | Job-operation sequences | Schedule-specific crossover | Job-shop scheduling |
+
+## CMA-ES (Covariance Matrix Adaptation)
+
+Self-adaptive continuous optimization — learns the search distribution shape.
+
+```javascript
+class CMAES {
+  constructor({ problem, sigma = 0.5, lambda = null }) {
+    const n = problem.dimensions;
+    this.n = n;
+    this.problem = problem;
+    this.lambda = lambda || Math.floor(4 + 3 * Math.log(n));  // Population size
+    this.mu = Math.floor(this.lambda / 2);  // Parent count
+
+    // Weights for recombination (log-scale, normalized)
+    this.weights = Array.from({ length: this.mu }, (_, i) =>
+      Math.log(this.mu + 0.5) - Math.log(i + 1)
+    );
+    const wSum = this.weights.reduce((a, b) => a + b, 0);
+    this.weights = this.weights.map(w => w / wSum);
+
+    // State
+    this.mean = problem.createRandom().genes;
+    this.sigma = sigma;
+    this.C = identity(n);       // Covariance matrix
+    this.ps = zeros(n);         // Evolution path (sigma)
+    this.pc = zeros(n);         // Evolution path (covariance)
+    this.gen = 0;
+  }
+
+  step() {
+    // 1. Sample lambda offspring from N(mean, sigma^2 * C)
+    const offspring = [];
+    for (let i = 0; i < this.lambda; i++) {
+      const z = sampleNormal(this.n);
+      const x = add(this.mean, scale(matVecMul(sqrtMatrix(this.C), z), this.sigma));
+      offspring.push({ genes: x, fitness: this.problem.evaluate({ genes: x }) });
+    }
+
+    // 2. Sort by fitness, select mu best
+    offspring.sort((a, b) => a.fitness - b.fitness);
+    const selected = offspring.slice(0, this.mu);
+
+    // 3. Recombine: weighted mean of selected
+    const newMean = weightedSum(selected.map(s => s.genes), this.weights);
+
+    // 4. Update evolution paths and covariance matrix
+    // (simplified — full CMA-ES updates ps, pc, C, sigma)
+    this.mean = newMean;
+    this.gen++;
+  }
+}
+```
+
+**Key property**: CMA-ES adapts the **shape** of the search distribution to the fitness landscape — stretches along ridges, shrinks along steep gradients. No hyperparameter tuning of mutation rates needed.
+
+## Island Model (Multi-Population)
+
+Run multiple independent populations with periodic migration — maintains diversity, enables parallelism.
+
+```javascript
+class IslandModelGA {
+  constructor({ problem, numIslands = 4, islandSize = 50, migrationRate = 0.1, migrationInterval = 10, operators }) {
+    this.islands = Array.from({ length: numIslands }, () =>
+      new EvolutionaryAlgorithm({ problem, populationSize: islandSize, maxGenerations: 1, operators })
+    );
+    this.migrationRate = migrationRate;
+    this.migrationInterval = migrationInterval;
+    this.gen = 0;
+  }
+
+  step() {
+    // Evolve each island independently (parallelizable)
+    for (const island of this.islands) island.run();
+
+    // Periodic migration: ring topology
+    if (++this.gen % this.migrationInterval === 0) {
+      const migrants = Math.floor(this.islands[0].popSize * this.migrationRate);
+      for (let i = 0; i < this.islands.length; i++) {
+        const source = this.islands[i];
+        const target = this.islands[(i + 1) % this.islands.length];
+        const best = source.population.slice().sort((a, b) => a.fitness - b.fitness).slice(0, migrants);
+        target.population.splice(-migrants, migrants, ...best.map(ind => ({ ...ind })));
+      }
+    }
+  }
+}
+```
+
+| Topology | Migration Pattern | Diversity |
+|----------|------------------|-----------|
+| **Ring** | Island i → Island (i+1) | High (slow mixing) |
+| **Star** | All ↔ Central island | Medium |
+| **Fully Connected** | All ↔ All | Low (fast convergence) |
+| **Random** | Random pairs each interval | Medium-High |
+
+## Grammar-Constrained GP
+
+From HeuristicLab/HEAL — use formal grammars to restrict the expression search space, preventing invalid programs.
+
+```javascript
+// Grammar defines allowed symbol combinations
+const grammar = {
+  start: ['expr'],
+  expr: ['binary_op', 'unary_op', 'terminal'],
+  binary_op: { symbols: ['+', '-', '*', '/'], children: ['expr', 'expr'] },
+  unary_op: { symbols: ['sin', 'cos', 'exp', 'log'], children: ['expr'] },
+  terminal: { symbols: ['x', 'y', 'const'], children: [] },
+
+  // Constraints: max depth, min/max children per symbol
+  maxDepth: 12,
+  constraints: {
+    '/': { childBlacklist: [['const']] },  // No division by constant (simplify)
+    'log': { childWhitelist: [['binary_op', 'unary_op']] }  // log of complex expr only
+  }
+};
+
+function generateTree(grammar, symbol = 'start', depth = 0) {
+  if (depth >= grammar.maxDepth || grammar[symbol].children?.length === 0) {
+    return pickRandom(grammar.terminal.symbols);  // Force terminal at max depth
+  }
+
+  const production = pickRandom(grammar[symbol]);
+  const node = { op: pickRandom(production.symbols), children: [] };
+
+  for (const childType of production.children || []) {
+    node.children.push(generateTree(grammar, childType, depth + 1));
+  }
+
+  return node;
+}
+```
+
+## Separable Nonlinear Regression (Variable Projection)
+
+From HEAL.VarPro — separate linear from nonlinear parameters for efficient symbolic regression fitting.
+
+```javascript
+// Given model: y = a₁·f₁(x, θ) + a₂·f₂(x, θ) + ... + aₖ·fₖ(x, θ)
+// Linear params: a₁...aₖ (solved analytically via OLS)
+// Nonlinear params: θ (optimized iteratively)
+
+function varPro(model, data, nonlinearParams) {
+  function residual(theta) {
+    // 1. Evaluate basis functions at current nonlinear params
+    const Phi = data.map(x => model.basisFunctions.map(f => f(x, theta)));
+
+    // 2. Solve linear params analytically: a = (Φᵀ·Φ)⁻¹·Φᵀ·y
+    const linearParams = leastSquares(Phi, data.targets);
+
+    // 3. Compute residuals
+    return data.targets.map((y, i) =>
+      y - linearParams.reduce((sum, a, j) => sum + a * Phi[i][j], 0)
+    );
+  }
+
+  // Only optimize nonlinear params — linear ones are implicit
+  return levenbergMarquardt(residual, nonlinearParams);
+}
+```
+
+**Why this matters**: For expressions like `a·sin(b·x + c) + d·x²`, VarPro eliminates `a` and `d` from the search, optimizing only `b` and `c`. Dramatically reduces the nonlinear search space.
+
+## Exhaustive Equation Search
+
+From HEAL.EquationSearch + TreesearchLib — systematically enumerate all expressions within a grammar up to a complexity bound.
+
+```javascript
+// BFS over the grammar's production rules
+function exhaustiveSearch(grammar, dataset, maxComplexity) {
+  const queue = [{ tree: grammar.start, complexity: 1 }];
+  const paretoFront = [];  // Best accuracy-vs-complexity tradeoff
+
+  while (queue.length > 0) {
+    const { tree, complexity } = queue.shift();
+
+    if (isComplete(tree)) {
+      // Fit parameters via VarPro, evaluate fitness
+      const params = varPro(tree, dataset);
+      const fitness = rmse(tree, params, dataset);
+      updateParetoFront(paretoFront, { tree, fitness, complexity });
+      continue;
+    }
+
+    // Expand next non-terminal using grammar rules
+    for (const production of grammar.expansions(tree)) {
+      const newComplexity = complexity + production.cost;
+      if (newComplexity <= maxComplexity) {
+        queue.push({ tree: applyProduction(tree, production), complexity: newComplexity });
+      }
+    }
+  }
+
+  return paretoFront;
+}
+```
+
+**Semantic deduplication**: hash expression semantics (outputs on sample points) to prune equivalent expressions before evaluation.
+
+## Linear Tree Representation (Operon)
+
+From Operon (202 stars, C++20) — high-performance GP using flat arrays instead of pointer-based trees.
+
+```javascript
+// Instead of nested objects, trees are flat arrays traversed by index
+// Each node is a fixed-size struct (40 bytes in Operon)
+class LinearTree {
+  constructor() {
+    this.nodes = [];  // Flat array: [node0, node1, ..., nodeN]
+    // Traversal: each node stores its subtree length
+    // Children are contiguous in postfix order
+  }
+
+  // Evaluate using a simple stack machine (cache-friendly)
+  evaluate(inputs) {
+    const stack = [];
+    for (const node of this.nodes) {
+      if (node.arity === 0) {
+        stack.push(node.type === 'var' ? inputs[node.index] : node.value);
+      } else {
+        const args = stack.splice(-node.arity);
+        stack.push(node.op(...args));
+      }
+    }
+    return stack[0];
+  }
+}
+```
+
+**Performance**: 10-100x faster than pointer-based trees due to cache locality and SIMD-friendly memory layout.
+
+## HEAL Research Ecosystem Reference
+
+| Repository | Purpose | Stars |
+|-----------|---------|-------|
+| **Operon** | C++20 high-perf GP for symbolic regression | 202 |
+| **SimSharp** | .NET discrete event simulation (SimPy port) | 153 |
+| **PyOperon** | Python/scikit-learn bindings for Operon | 71 |
+| **HeuristicLab** | Full GUI optimization platform (20+ algorithms) | 52 |
+| **vstat** | SIMD descriptive statistics | 19 |
+| **TreesearchLib** | 8 tree search algorithms (beam, MCTS, pilot) | 13 |
+| **HEAL.Attic** | ProtoBuf serialization for .NET | 13 |
+| **HeuristicLib** | Modern library successor to HeuristicLab | 12 |
+| **HEAL.EquationSearch** | Exhaustive grammar-constrained equation discovery | — |
+| **HEAL.VarPro** | Variable projection with L1 regularization | 5 |
+| **HEAL.NonlinearRegression** | Profile-likelihood NLS fitting | 3 |
+| **HEAL.CFR** | Continued fraction regression | — |
 
 ## Anti-Patterns
 
 | WRONG | CORRECT |
 |-------|---------|
-| Monolithic algorithm loop | Composable operator graph |
+| Monolithic algorithm loop | Composable operator graph or direct-code |
 | Hardcoded selection/crossover | Pluggable operators via interfaces |
 | Evaluate fitness inside algorithm | Separate Problem with evaluate() |
-| No diversity management | Crowding distance, niching, or ALPS |
+| No diversity management | Crowding distance, niching, ALPS, or islands |
 | Premature convergence without detection | Track population diversity metrics |
 | GP trees grow unbounded | Max depth limit + parsimony pressure |
 | PSO without velocity clamping | Clamp velocity to prevent explosion |
 | DE with fixed F and CR | Self-adaptive or jDE variant |
+| Fit all params with gradient descent | VarPro: solve linear params analytically |
+| Pointer-based GP trees | Linear tree representation for cache locality |
+| Generate expressions without grammar | Grammar-constrained search prevents invalid programs |
+| No semantic deduplication | Hash expression outputs to prune equivalents |
 
 ## Integration with Heuristic Search & Meta-Loop
 
 This skill connects to the other two QURA skills:
 
-- **Heuristic Search** provides local refinement within evolutionary operators (memetic algorithms)
+- **Heuristic Search** provides local refinement within evolutionary operators (memetic algorithms) and exhaustive equation search (TreesearchLib)
 - **This skill** provides the population-based diversification and genetic operators
 - **Self-Optimizing Meta-Loop** uses evolutionary operators to generate mutation candidates, then benchmarks to keep winners
 
