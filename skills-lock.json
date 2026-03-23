@@ -24,17 +24,17 @@
     "heuristic-search": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
-      "computedHash": "227b82614344c9bd472872052dea6783b2c3361b4b44daec37146488a3bcafff"
+      "computedHash": "0bd56e22454f6901578d7ebba8cd0446063df6cdd48a7a50274e89ccccb89b2d"
     },
     "evolutionary-optimization": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
-      "computedHash": "3cc3dae3c6081f60058af5eda9b82371da08a968693689b3ed62964ba9c9be85"
+      "computedHash": "95dba33c94045d515620f442585c9d3afd45be2532b2063fdee29d225ddb8dcc"
     },
     "self-optimizing-meta-loop": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
-      "computedHash": "84dd4234d1ff89858c7dacfba25c936fca98ad3c49caefa440cfb914b03a69aa"
+      "computedHash": "0b9892e500af5274ae021263e667163467ad22edf2b688b9782f54d62d193073"
     }
   }
 }

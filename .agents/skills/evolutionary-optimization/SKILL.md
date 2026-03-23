@@ -766,6 +766,129 @@ class LinearTree {
 
 **Performance**: 10-100x faster than pointer-based trees due to cache locality and SIMD-friendly memory layout.
 
+## Hyper-Heuristics (Heuristics That Select Heuristics)
+
+A meta-level above individual algorithms — the hyper-heuristic learns which low-level heuristic to apply in each situation. Two modes: **selection** (pick from existing) and **generation** (construct new heuristics from primitives).
+
+```javascript
+// Selection hyper-heuristic: learn which operator works best in context
+class SelectionHyperHeuristic {
+  constructor(lowLevelHeuristics, { learningRate = 0.1, epsilon = 0.1 }) {
+    this.heuristics = lowLevelHeuristics.map(h => ({
+      heuristic: h,
+      qValue: 0,       // Learned quality estimate
+      uses: 0
+    }));
+    this.lr = learningRate;
+    this.epsilon = epsilon;
+  }
+
+  select() {
+    // Epsilon-greedy: explore vs exploit
+    if (Math.random() < this.epsilon) {
+      return this.heuristics[Math.floor(Math.random() * this.heuristics.length)];
+    }
+    return this.heuristics.reduce((best, h) => h.qValue > best.qValue ? h : best);
+  }
+
+  step(solution, evaluator) {
+    const entry = this.select();
+    const candidate = entry.heuristic.apply(solution);
+    const improvement = evaluator(solution) - evaluator(candidate);
+
+    // Update Q-value based on outcome
+    entry.qValue += this.lr * (improvement - entry.qValue);
+    entry.uses++;
+
+    return improvement > 0 ? candidate : solution;
+  }
+}
+
+// Generative hyper-heuristic: compose new heuristics from primitive operators
+class GenerativeHyperHeuristic {
+  constructor(primitives, grammar) {
+    this.primitives = primitives;  // [swap, insert, reverse, remove, ...]
+    this.grammar = grammar;         // How primitives can be combined
+  }
+
+  generate() {
+    // Use GP/grammatical evolution to compose a new heuristic
+    const tree = generateFromGrammar(this.grammar);
+    return {
+      apply(solution) {
+        let s = solution;
+        for (const primitive of tree.traverse()) {
+          s = primitive.execute(s);
+        }
+        return s;
+      }
+    };
+  }
+}
+```
+
+| Level | What It Does | Example |
+|-------|-------------|---------|
+| **Low-level heuristic** | Directly modifies solutions | 2-opt, swap, insert, mutate |
+| **Selection hyper-heuristic** | Picks which low-level to apply | Q-learning, MAB, roulette |
+| **Generative hyper-heuristic** | Constructs new low-level heuristics | GP over primitives, grammatical evolution |
+| **Meta-loop** (QURA) | Verifies that hyper-heuristic decisions improve metrics | Benchmark → keep/revert |
+
+## Heterogeneous Island Model (pagmo2-style)
+
+From ESA's pagmo2 — each island runs a **different** algorithm. Migration exchanges solutions between fundamentally different optimization strategies.
+
+```javascript
+class HeterogeneousIslandModel {
+  constructor({ problem, islands }) {
+    // Each island is a different algorithm
+    this.islands = islands.map(config => ({
+      algorithm: config.algorithm,  // GA, PSO, SA, DE — any mix
+      population: Array.from({ length: config.popSize }, () => {
+        const ind = problem.createRandom();
+        ind.fitness = problem.evaluate(ind);
+        return ind;
+      }),
+      topology: config.topology || 'ring'
+    }));
+    this.gen = 0;
+  }
+
+  step() {
+    // Evolve each island with its own algorithm (fully parallelizable)
+    for (const island of this.islands) {
+      island.population = island.algorithm.evolve(island.population);
+    }
+
+    // Asynchronous migration: islands exchange best solutions
+    if (++this.gen % 10 === 0) {
+      for (let i = 0; i < this.islands.length; i++) {
+        const target = (i + 1) % this.islands.length;
+        const migrant = this.islands[i].population
+          .reduce((best, p) => p.fitness < best.fitness ? p : best);
+        // Replace worst in target
+        const worstIdx = this.islands[target].population
+          .reduce((wi, p, j, arr) => p.fitness > arr[wi].fitness ? j : wi, 0);
+        this.islands[target].population[worstIdx] = { ...migrant };
+      }
+    }
+  }
+}
+
+// Example: 4 islands, 4 different algorithms
+const model = new HeterogeneousIslandModel({
+  problem: myProblem,
+  islands: [
+    { algorithm: new GeneticAlgorithm(/*...*/), popSize: 50 },
+    { algorithm: new ParticleSwarm(/*...*/), popSize: 50 },
+    { algorithm: new DifferentialEvolution(/*...*/), popSize: 50 },
+    { algorithm: new SimulatedAnnealing(/*...*/), popSize: 1 }
+  ]
+});
+```
+
+**Key insight**: different algorithms excel on different landscape features. SA escapes local optima, PSO converges fast on smooth landscapes, GA maintains diversity, DE handles multimodality. Let them all run and share discoveries.
+
 ## HEAL Research Ecosystem Reference
 
 | Repository | Purpose | Stars |

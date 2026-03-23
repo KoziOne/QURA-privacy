@@ -445,6 +445,185 @@ function reconstructPath(goalNode) {
 }
 ```
 
+## Tabu Search
+
+Memory-based local search — maintains a **tabu list** of recently visited states/moves to prevent cycling.
+
+```javascript
+class TabuSearchIterator {
+  constructor(initialNode, expander, evaluator, { tabuTenure = 7, maxIter = 1000 }) {
+    this.current = initialNode;
+    this.current.score = evaluator.evaluate(initialNode.state);
+    this.best = this.current;
+    this.expander = expander;
+    this.evaluator = evaluator;
+    this.tabuList = [];         // Recent moves (FIFO, bounded by tenure)
+    this.tabuTenure = tabuTenure;
+    this.iter = 0;
+  }
+
+  next() {
+    let bestNeighbor = null;
+
+    for (const transition of this.expander.successorsOf(this.current.state)) {
+      const child = this.expander.makeNode(this.current, transition);
+      child.score = this.evaluator.evaluate(child.state);
+
+      const isTabu = this.tabuList.includes(transitionKey(transition));
+
+      // Accept if: (a) not tabu, or (b) tabu but better than global best (aspiration)
+      if (!isTabu || child.score > this.best.score) {
+        if (!bestNeighbor || child.score > bestNeighbor.score) {
+          bestNeighbor = child;
+          bestNeighbor._move = transitionKey(transition);
+        }
+      }
+    }
+
+    if (bestNeighbor) {
+      this.current = bestNeighbor;
+      this.tabuList.push(bestNeighbor._move);
+      if (this.tabuList.length > this.tabuTenure) this.tabuList.shift();
+      if (this.current.score > this.best.score) this.best = this.current;
+    }
+
+    return { node: this.current, best: this.best, iter: ++this.iter };
+  }
+}
+```
+
+| Component | Purpose |
+|-----------|---------|
+| **Tabu list** | Short-term memory — prevents revisiting recent moves |
+| **Aspiration criterion** | Override tabu if move produces new global best |
+| **Tabu tenure** | How long moves stay forbidden (tune: too short → cycling, too long → restricted) |
+| **Long-term memory** | (Optional) frequency-based diversification — penalize overused moves |
+
+## Adaptive Large Neighborhood Search (ALNS)
+
+Destroy-and-repair paradigm — iteratively destroys part of a solution, then repairs it. Adaptive weights learn which operators work best.
+
+```javascript
+class ALNSIterator {
+  constructor(initialSolution, destroyOps, repairOps, evaluator, { w1 = 33, w2 = 9, w3 = 13, decay = 0.1 }) {
+    this.current = initialSolution;
+    this.best = initialSolution;
+    this.destroyOps = destroyOps.map(op => ({ op, weight: 1, score: 0, uses: 0 }));
+    this.repairOps = repairOps.map(op => ({ op, weight: 1, score: 0, uses: 0 }));
+    this.evaluator = evaluator;
+    this.rewards = { newBest: w1, improved: w2, accepted: w3 };
+    this.decay = decay;
+  }
+
+  next() {
+    // Select operators via roulette wheel on adaptive weights
+    const destroy = rouletteSelect(this.destroyOps);
+    const repair = rouletteSelect(this.repairOps);
+
+    // Destroy: remove part of solution
+    const partial = destroy.op.execute(this.current);
+    // Repair: reconstruct complete solution
+    const candidate = repair.op.execute(partial);
+    candidate.fitness = this.evaluator.evaluate(candidate);
+
+    // Score operators based on outcome
+    let reward = 0;
+    if (candidate.fitness < this.best.fitness) {
+      reward = this.rewards.newBest;
+      this.best = candidate;
+      this.current = candidate;
+    } else if (candidate.fitness < this.current.fitness) {
+      reward = this.rewards.improved;
+      this.current = candidate;
+    } else if (Math.random() < Math.exp(-(candidate.fitness - this.current.fitness) / this.T)) {
+      reward = this.rewards.accepted;  // SA-style acceptance
+      this.current = candidate;
+    }
+
+    // Update adaptive weights
+    destroy.score += reward; destroy.uses++;
+    repair.score += reward; repair.uses++;
+
+    return { solution: this.current, best: this.best };
+  }
+
+  updateWeights() {
+    for (const pool of [this.destroyOps, this.repairOps]) {
+      for (const entry of pool) {
+        if (entry.uses > 0) {
+          entry.weight = entry.weight * (1 - this.decay) + this.decay * (entry.score / entry.uses);
+          entry.score = 0; entry.uses = 0;
+        }
+      }
+    }
+  }
+}
+```
+
+**Destroy operators**: random removal, worst removal, related removal, Shaw removal
+**Repair operators**: greedy insertion, regret insertion, random insertion
+
+## Constraint Propagation
+
+For constraint satisfaction problems (CSP) — reduce domains before searching.
+
+```javascript
+class CSPSolver {
+  constructor(variables, domains, constraints) {
+    this.variables = variables;     // ['x1', 'x2', 'x3']
+    this.domains = new Map(         // var → Set of possible values
+      variables.map((v, i) => [v, new Set(domains[i])])
+    );
+    this.constraints = constraints; // [{vars: ['x1','x2'], test: (a,b) => a !== b}]
+  }
+
+  // AC-3: arc consistency — prune impossible values
+  arcConsistency() {
+    const queue = [...this.constraints];
+    while (queue.length > 0) {
+      const { vars: [xi, xj], test } = queue.shift();
+      let revised = false;
+
+      for (const vi of this.domains.get(xi)) {
+        const supported = [...this.domains.get(xj)].some(vj => test(vi, vj));
+        if (!supported) {
+          this.domains.get(xi).delete(vi);
+          revised = true;
+        }
+      }
+
+      if (revised) {
+        if (this.domains.get(xi).size === 0) return false; // No solution
+        // Re-queue constraints involving xi
+        queue.push(...this.constraints.filter(c => c.vars.includes(xi) && c !== { vars: [xi, xj], test }));
+      }
+    }
+    return true;
+  }
+
+  // Backtracking search with constraint propagation
+  solve() {
+    if (!this.arcConsistency()) return null;
+    return this._backtrack({});
+  }
+
+  _backtrack(assignment) {
+    if (Object.keys(assignment).length === this.variables.length) return assignment;
+
+    const unassigned = this.variables.find(v => !(v in assignment));
+    for (const value of this.domains.get(unassigned)) {
+      if (this._consistent(unassigned, value, assignment)) {
+        assignment[unassigned] = value;
+        const result = this._backtrack(assignment);
+        if (result) return result;
+        delete assignment[unassigned];
+      }
+    }
+    return null;
+  }
+}
+```
+
 ## Anti-Patterns
 
 | WRONG | CORRECT |

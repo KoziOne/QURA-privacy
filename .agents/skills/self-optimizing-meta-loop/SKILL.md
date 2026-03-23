@@ -217,12 +217,75 @@ class ReversionGuard {
 | Free-text agent output | Structured JSON actions with typed fields |
 | Unbounded reasoning loop | Max step limit (10) with fallback synthesis |
 
+## Learned Heuristic Selection (RL + Meta-Loop)
+
+Instead of hand-coding which mutation/operator to try, learn a policy that selects improvement operators based on the current state.
+
+```javascript
+// RL agent learns which improvement operator to apply
+class LearnedOperatorSelector {
+  constructor(operators, { stateFeatures, lr = 0.01, gamma = 0.99 }) {
+    this.operators = operators;
+    this.stateFeatures = stateFeatures; // solution → feature vector
+    this.qTable = new Map();            // (stateKey, opIndex) → Q-value
+    this.lr = lr;
+    this.gamma = gamma;
+  }
+
+  selectOperator(solution) {
+    const state = this.stateFeatures(solution);
+    const key = stateKey(state);
+
+    // Epsilon-greedy over operators
+    if (Math.random() < 0.1) return randInt(0, this.operators.length);
+    return argmax(this.operators.map((_, i) => this.getQ(key, i)));
+  }
+
+  update(state, opIndex, reward, nextState) {
+    const key = stateKey(state);
+    const nextKey = stateKey(nextState);
+    const maxNextQ = Math.max(...this.operators.map((_, i) => this.getQ(nextKey, i)));
+    const target = reward + this.gamma * maxNextQ;
+    const current = this.getQ(key, opIndex);
+    this.setQ(key, opIndex, current + this.lr * (target - current));
+  }
+
+  // Integration with meta-loop: reward = benchmark improvement
+  async optimizeWithRL(targetFile) {
+    let solution = await readFile(targetFile);
+    let baseline = await benchmark();
+
+    for (let step = 0; step < maxSteps; step++) {
+      const state = this.stateFeatures(solution);
+      const opIdx = this.selectOperator(solution);
+      const operator = this.operators[opIdx];
+
+      const candidate = operator.apply(solution);
+      await writeFile(targetFile, candidate);
+      const result = await benchmark();
+
+      const reward = baseline.loss - result.loss;  // Positive = improvement
+      this.update(state, opIdx, reward, this.stateFeatures(candidate));
+
+      if (result.loss < baseline.loss) {
+        solution = candidate;
+        baseline = result;
+      } else {
+        await writeFile(targetFile, solution);  // Revert
+      }
+    }
+  }
+}
+```
+
+**Key insight**: the meta-loop's benchmark provides a **natural reward signal** for RL. The agent learns which operators work in which contexts — no hand-tuning needed. This bridges the gap between the meta-controller's selection paradigm and the hyper-heuristic's adaptive learning.
+
 ## Integration with Heuristic Search & Evolutionary Optimization
 
 The meta-loop composes with the other two QURA skills:
 
 - **Heuristic Search** provides the traversal algorithms the engine uses to navigate solution spaces
-- **Evolutionary Optimization** provides the mutation/crossover/selection operators that generate candidate mutations
-- **This skill** provides the closed-loop verification that ensures only improvements survive
+- **Evolutionary Optimization** provides the mutation/crossover/selection operators that generate candidate mutations, plus hyper-heuristics that learn which operators to apply
+- **This skill** provides the closed-loop verification that ensures only improvements survive, plus RL-based operator selection
 
-Together: **search** finds candidates → **evolution** generates mutations → **meta-loop** verifies and keeps winners.
+Together: **search** finds candidates → **evolution** generates mutations → **meta-loop** verifies and learns which strategies work.
