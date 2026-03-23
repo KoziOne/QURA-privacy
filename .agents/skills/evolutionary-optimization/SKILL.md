@@ -889,6 +889,117 @@ const model = new HeterogeneousIslandModel({
 
 **Key insight**: different algorithms excel on different landscape features. SA escapes local optima, PSO converges fast on smooth landscapes, GA maintains diversity, DE handles multimodality. Let them all run and share discoveries.
 
+## Surrogate-Assisted Optimization
+
+When fitness evaluation is expensive (simulation, training, benchmarking), build a **cheap probabilistic model** (surrogate) and optimize that instead.
+
+```javascript
+class SurrogateOptimizer {
+  constructor({ problem, surrogateModel, acquisitionFn, initialSamples = 10 }) {
+    this.problem = problem;
+    this.surrogate = surrogateModel;  // Gaussian Process, Random Forest, or neural net
+    this.acquisition = acquisitionFn; // Expected Improvement, UCB, or PI
+    this.archive = [];                // (solution, true_fitness) pairs
+
+    // Bootstrap: evaluate a few random points to seed the surrogate
+    for (let i = 0; i < initialSamples; i++) {
+      const x = problem.createRandom();
+      x.fitness = problem.evaluate(x);  // Expensive!
+      this.archive.push(x);
+    }
+    this.surrogate.fit(this.archive);
+  }
+
+  step() {
+    // 1. Optimize acquisition function on the cheap surrogate (many evals OK)
+    const candidate = this.optimizeAcquisition();
+
+    // 2. Evaluate candidate on the REAL expensive function
+    candidate.fitness = this.problem.evaluate(candidate);
+    this.archive.push(candidate);
+
+    // 3. Update surrogate with new data point
+    this.surrogate.fit(this.archive);
+
+    return candidate;
+  }
+
+  optimizeAcquisition() {
+    // Run a fast optimizer (DE, PSO) on the surrogate's acquisition function
+    let best = null;
+    for (let i = 0; i < 1000; i++) {
+      const x = this.problem.createRandom();
+      const { mean, variance } = this.surrogate.predict(x);
+      x.acquisitionScore = this.acquisition(mean, variance, this.bestSoFar());
+      if (!best || x.acquisitionScore > best.acquisitionScore) best = x;
+    }
+    return best;
+  }
+}
+
+// Acquisition functions
+const acquisitionFunctions = {
+  // Expected Improvement: balance exploitation and exploration
+  EI: (mean, variance, bestFitness) => {
+    const std = Math.sqrt(variance);
+    if (std === 0) return 0;
+    const z = (bestFitness - mean) / std;
+    return (bestFitness - mean) * cdf(z) + std * pdf(z);
+  },
+  // Upper Confidence Bound: tunable exploration via kappa
+  UCB: (mean, variance, _, kappa = 2.0) => mean + kappa * Math.sqrt(variance)
+};
+```
+
+**When to use**: any time a single fitness evaluation takes >1 second (simulation, training run, physical experiment). Surrogate reduces expensive evaluations from thousands to ~100-200.
+
+## Estimation of Distribution Algorithms (EDA)
+
+Replace crossover/mutation with **statistical modeling** — learn the distribution of good solutions, then sample from it.
+
+```javascript
+class EDA {
+  constructor({ problem, popSize = 100, selectRatio = 0.3 }) {
+    this.problem = problem;
+    this.popSize = popSize;
+    this.selectTop = Math.floor(popSize * selectRatio);
+    this.population = Array.from({ length: popSize }, () => {
+      const ind = problem.createRandom();
+      ind.fitness = problem.evaluate(ind);
+      return ind;
+    });
+  }
+
+  step() {
+    // 1. Select best individuals
+    this.population.sort((a, b) => a.fitness - b.fitness);
+    const selected = this.population.slice(0, this.selectTop);
+
+    // 2. Estimate distribution from selected (per-dimension Gaussian)
+    const dims = selected[0].genes.length;
+    const means = Array(dims).fill(0);
+    const stds = Array(dims).fill(0);
+
+    for (let d = 0; d < dims; d++) {
+      const values = selected.map(s => s.genes[d]);
+      means[d] = values.reduce((a, b) => a + b, 0) / values.length;
+      stds[d] = Math.sqrt(values.reduce((s, v) => s + (v - means[d]) ** 2, 0) / values.length);
+      stds[d] = Math.max(stds[d], 1e-6);  // Prevent collapse
+    }
+
+    // 3. Sample new population from estimated distribution
+    this.population = Array.from({ length: this.popSize }, () => {
+      const genes = means.map((m, d) => m + stds[d] * gaussian());
+      const ind = { genes };
+      ind.fitness = this.problem.evaluate(ind);
+      return ind;
+    });
+  }
+}
+```
+
+**Key difference from GA**: no crossover/mutation operators — the distribution itself evolves. More advanced variants (UMDA, PBIL, BOA) model variable dependencies via Bayesian networks.
+
 ## HEAL Research Ecosystem Reference
 
 | Repository | Purpose | Stars |
