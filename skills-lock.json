@@ -36,6 +36,11 @@
       "sourceType": "local",
       "computedHash": "7964a21f852fdb7ba885d5b0be540c941b54041633e38eccaa723ed13c0e93a7"
     },
+    "self-validation-assessment": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "896614b46a0a513ef9f3b1662cd9e64f96178a8611946c8977c9dd30d72af7a7"
+    },
     "self-optimizing-meta-loop": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
