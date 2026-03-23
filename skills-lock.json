@@ -20,6 +20,21 @@
       "source": "modular/skills",
       "sourceType": "github",
       "computedHash": "e6da144a780e2d5d5e914c9fec8124b9dd2acfd9e21e16800686e76107469369"
+    },
+    "heuristic-search": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "bc1006777a42d5849c6feea4232439e5c84a95b9238e39eb33fd939dfa3de29c"
+    },
+    "evolutionary-optimization": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "ea3bc9f1cacdc379a1e72d4eabe75e1a1edbb45743014007744e975829be36cf"
+    },
+    "self-optimizing-meta-loop": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "84dd4234d1ff89858c7dacfba25c936fca98ad3c49caefa440cfb914b03a69aa"
     }
   }
 }
