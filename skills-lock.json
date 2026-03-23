@@ -31,6 +31,11 @@
       "sourceType": "local",
       "computedHash": "95dba33c94045d515620f442585c9d3afd45be2532b2063fdee29d225ddb8dcc"
     },
+    "sovereign-ai-architecture": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "7964a21f852fdb7ba885d5b0be540c941b54041633e38eccaa723ed13c0e93a7"
+    },
     "self-optimizing-meta-loop": {
       "source": "QURA-privacy/skills",
       "sourceType": "local",
