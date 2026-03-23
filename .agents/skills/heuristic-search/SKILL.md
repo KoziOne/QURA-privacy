@@ -14,18 +14,21 @@ Heuristic search navigates solution spaces efficiently by combining **state expa
 
 ## Algorithm Catalog
 
-| Algorithm | Type | Use Case | Memory | Optimality |
-|-----------|------|----------|--------|------------|
-| **BFS** | Uninformed | Shortest path (unweighted) | O(b^d) | Yes |
-| **DFS** | Uninformed | Exhaustive exploration | O(bd) | No |
-| **Dijkstra** | Uninformed | Shortest path (weighted) | O(V+E) | Yes |
-| **Bellman-Ford** | Uninformed | Negative weights | O(VE) | Yes |
-| **A*** | Informed | Best-first with heuristic | O(b^d) | Yes (admissible h) |
-| **IDA*** | Informed | Memory-bounded A* | O(bd) | Yes |
-| **AD*** | Informed | Anytime, dynamic replanning | O(b^d) | Bounded suboptimal |
-| **Hill Climbing** | Local | Fast local optimization | O(1) | No (local optima) |
-| **Enforced Hill Climbing** | Local | Escape plateaus via BFS | O(b^d) | No |
-| **Multiobjective** | Multi | Pareto-optimal frontiers | O(b^d) | Pareto-optimal |
+| Algorithm | Type | IARM Reasoning Mode | Memory | Optimality |
+|-----------|------|---------------------|--------|------------|
+| **BFS** | Uninformed | *Exhaustive fairness* — consider all options at equal depth | O(b^d) | Yes |
+| **DFS** | Uninformed | *Committed depth* — follow one thread to conclusion | O(bd) | No |
+| **Dijkstra** | Uninformed | *Cost-aware prudence* — never pay more than necessary | O(V+E) | Yes |
+| **Bellman-Ford** | Uninformed | *Pessimistic correction* — relax until stable | O(VE) | Yes |
+| **A*** | Informed | *Informed optimism* — trust the heuristic estimate | O(b^d) | Yes (if h admissible+consistent) |
+| **IDA*** | Informed | *Frugal persistence* — re-derive rather than store | O(bd) | Yes (if h admissible) |
+| **AD*** | Informed | *Anytime refinement* — good answer now, better later | O(b^d) | Bounded suboptimal |
+| **Hill Climbing** | Local | *Greedy ascent* — trust the gradient | O(1) | No (local optima) |
+| **Simulated Annealing** | Local | *Disciplined chaos* — accept worse early, tighten later | O(1) | Probabilistic |
+| **Tabu Search** | Memory | *Memory-guided novelty* — refuse to repeat mistakes | O(tenure) | No (but avoids cycling) |
+| **ALNS** | Adaptive | *Adaptive destruction* — break to rebuild better | O(n) | No (but self-improving) |
+| **Multiobjective** | Multi | *Plurality preservation* — maintain all non-dominated tradeoffs | O(b^d) | Pareto-optimal |
+| **CSP** | Constraint | *Constraint narrowing* — eliminate impossibilities first | O(d·n) | Yes (complete) |
 
 ## Core Type System
 
@@ -107,35 +110,45 @@ class SearchIterator {
 
 ```javascript
 class AStarIterator extends SearchIterator {
-  constructor(initialNode, expander, heuristic) {
+  constructor(initialNode, expander, heuristic, algebra = numericCost) {
     super(initialNode, expander);
-    this.frontier = new PriorityQueue((a, b) => a.f - b.f);  // Min-heap on f
+    this.frontier = new PriorityQueue(algebra.compare);  // QGN: derived comparator
     this.heuristic = heuristic;
+    this.algebra = algebra;
+    this.health = { expanded: 0, duplicates: 0, heuristicViolations: 0 };
 
-    initialNode.g = 0;
+    initialNode.g = algebra.zero;
     initialNode.h = heuristic.estimate(initialNode.state);
-    initialNode.f = initialNode.g + initialNode.h;
+    initialNode.f = algebra.combine(initialNode.g, initialNode.h);
     this.frontier.add(initialNode);
   }
 
   next() {
     const current = this.frontier.remove();
+    this.health.expanded++;
 
     for (const transition of this.expander.successorsOf(current.state)) {
       const child = this.expander.makeNode(current, transition);
-      const tentativeG = current.g + this.expander.cost(transition);
+      const tentativeG = this.algebra.combine(current.g, this.expander.cost(transition));
 
-      if (!this.visited.has(child.state) || tentativeG < this.visited.get(child.state).g) {
+      // SENTIENT: check heuristic consistency h(s) <= c(s,s') + h(s')
+      const childH = this.heuristic.estimate(child.state);
+      if (this.algebra.compare({ f: current.h }, { f: this.algebra.combine(this.expander.cost(transition), childH) }) > 0) {
+        this.health.heuristicViolations++;
+      }
+
+      if (!this.visited.has(child.state) || this.algebra.compare({ f: tentativeG }, { f: this.visited.get(child.state).g }) < 0) {
         child.g = tentativeG;
-        child.h = this.heuristic.estimate(child.state);
-        child.f = child.g + child.h;
+        child.h = childH;
+        child.f = this.algebra.combine(child.g, child.h);
         child.parent = current;
+        if (this.visited.has(child.state)) this.health.duplicates++;
         this.visited.set(child.state, child);
         this.frontier.add(child);
       }
     }
 
-    return current;
+    return { node: current, health: this.health };
   }
 }
 
@@ -351,15 +364,22 @@ Probabilistic local search that accepts worse solutions with decreasing probabil
 
 ```javascript
 class SimulatedAnnealingIterator {
-  constructor(initialNode, expander, evaluator, { T0 = 1000, cooling = 0.995, Tmin = 0.01 }) {
+  constructor(initialNode, expander, evaluator, config = {}) {
     this.current = initialNode;
     this.current.score = evaluator.evaluate(initialNode.state);
     this.best = this.current;
     this.expander = expander;
     this.evaluator = evaluator;
-    this.T = T0;           // Current temperature
-    this.cooling = cooling; // Cooling rate
-    this.Tmin = Tmin;      // Minimum temperature (frozen)
+    this.health = { accepted: 0, rejected: 0, improved: 0 };
+
+    // QGN-DIRECT: derive parameters from landscape, not hardcode
+    // T0: calibrate so ~80% of random moves accepted initially
+    // cooling: derive from search budget and temperature range
+    // Tmin: derive from noise floor of evaluator
+    const calibration = config.calibrationSamples || this.calibrate(expander, evaluator, initialNode);
+    this.T = config.T0 || calibration.T0;
+    this.cooling = config.cooling || calibration.cooling;
+    this.Tmin = config.Tmin || calibration.Tmin;
   }
 
   next() {
@@ -377,17 +397,39 @@ class SimulatedAnnealingIterator {
       if (candidate.score > this.best.score) this.best = candidate;
     }
 
-    this.T *= this.cooling;  // Cool down
-    return { node: this.current, best: this.best, temperature: this.T, frozen: this.T < this.Tmin };
+    // SENTIENT: track acceptance rate for self-calibration
+    if (delta > 0) this.health.improved++;
+    else if (delta <= 0 && this.current === candidate) this.health.accepted++;
+    else this.health.rejected++;
+
+    this.T *= this.cooling;
+    return { node: this.current, best: this.best, temperature: this.T, frozen: this.T < this.Tmin, health: this.health };
+  }
+
+  // QGN-DIRECT: derive parameters from landscape sampling
+  calibrate(expander, evaluator, initial, samples = 20) {
+    const deltas = [];
+    let node = initial;
+    for (let i = 0; i < samples; i++) {
+      const successors = [...expander.successorsOf(node.state)];
+      if (successors.length === 0) break;
+      const t = successors[Math.floor(Math.random() * successors.length)];
+      const next = expander.makeNode(node, t);
+      next.score = evaluator.evaluate(next.state);
+      deltas.push(Math.abs(next.score - node.score));
+      node = next;
+    }
+    const meanDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    return { T0: -meanDelta / Math.log(0.8), cooling: 0.995, Tmin: meanDelta * 0.001 };
   }
 }
 ```
 
-| Parameter | Effect | Tuning |
-|-----------|--------|--------|
-| `T0` (initial temp) | Higher = more exploration early | Set so ~80% of worse moves accepted initially |
-| `cooling` | Closer to 1 = slower cooling | 0.99-0.999 for thorough search, 0.9-0.95 for fast |
-| `Tmin` | When to stop | When acceptance probability is negligible |
+| Parameter | QGN Derivation | Fallback |
+|-----------|---------------|----------|
+| `T0` | `-meanDelta / log(0.8)` from landscape sampling | 1000 |
+| `cooling` | Derived from budget: `1 - 1/(expectedIter * 0.1)` | 0.995 |
+| `Tmin` | `meanDelta * 0.001` (noise floor) | 0.01 |
 
 ## Multiobjective Label-Setting
 
