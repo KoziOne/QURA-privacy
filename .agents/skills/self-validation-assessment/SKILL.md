@@ -618,6 +618,233 @@ class RAGTriadEvaluator {
 }
 ```
 
+## KL-Divergence Quality Gating (From OBLITERATUS)
+
+From OBLITERATUS's capability preservation pipeline — monitor distributional divergence as a quality signal. If any self-modification causes the system's output distribution to diverge beyond a budget, partially revert the most divergent components.
+
+```javascript
+class KLQualityGate {
+  constructor({ klBudget = 0.1, revertRatio = 0.5, windowSize = 50 }) {
+    this.klBudget = klBudget;
+    this.revertRatio = revertRatio;
+    this.baselineOutputs = [];  // Reference distribution from known-good state
+    this.recentOutputs = [];
+    this.windowSize = windowSize;
+  }
+
+  // Capture baseline from known-good system state
+  async captureBaseline(model, benchmarkInputs) {
+    this.baselineOutputs = await Promise.all(
+      benchmarkInputs.map(input => model.getOutputDistribution(input))
+    );
+  }
+
+  // After any self-modification: verify KL divergence within budget
+  async gate(model, benchmarkInputs, modification) {
+    const currentOutputs = await Promise.all(
+      benchmarkInputs.map(input => model.getOutputDistribution(input))
+    );
+
+    // Per-input KL divergence
+    const perInputKL = this.baselineOutputs.map((baseline, i) =>
+      klDivergence(baseline, currentOutputs[i])
+    );
+    const meanKL = perInputKL.reduce((a, b) => a + b, 0) / perInputKL.length;
+    const maxKL = Math.max(...perInputKL);
+
+    if (meanKL <= this.klBudget) {
+      return { pass: true, meanKL, maxKL, budget: this.klBudget };
+    }
+
+    // Over budget: identify which outputs diverged most
+    const divergentInputs = perInputKL
+      .map((kl, i) => ({ index: i, kl }))
+      .filter(d => d.kl > this.klBudget)
+      .sort((a, b) => b.kl - a.kl);
+
+    return {
+      pass: false,
+      meanKL, maxKL,
+      budget: this.klBudget,
+      divergentInputs,
+      recommendation: maxKL > this.klBudget * 3
+        ? 'full_revert'              // Severe divergence: revert entirely
+        : 'partial_revert',           // Moderate: interpolate back toward baseline
+      revertTargets: divergentInputs.slice(0, 5)  // Top 5 most divergent
+    };
+  }
+
+  // Partial reversion: blend modified state with baseline
+  async partialRevert(model, snapshot, ratio = this.revertRatio) {
+    const params = await model.getParameters();
+    const baseParams = await snapshot.getParameters();
+
+    for (const key of Object.keys(params)) {
+      for (let i = 0; i < params[key].length; i++) {
+        params[key][i] = (1 - ratio) * params[key][i] + ratio * baseParams[key][i];
+      }
+    }
+    await model.setParameters(params);
+  }
+}
+```
+
+**Key insight**: KL divergence is a single scalar that captures "how much did the system change?" — cheaper than running full eval suites, and catches distributional problems that task-specific evals miss.
+
+## Ouroboros Failure Resurgence Detection
+
+From OBLITERATUS's discovery that removed behaviors self-repair — apply this to validation: detect when previously-fixed failures resurface in rotated or compensatory form.
+
+```javascript
+class OuroborosValidator {
+  constructor(validationSuite) {
+    this.suite = validationSuite;
+    this.failureHistory = [];  // Archive of previously detected and fixed failures
+    this.resurgenceThreshold = 0.6;
+  }
+
+  // After any fix: check if the fix holds, or if the failure rotated
+  async detectResurgence(model, recentFix) {
+    // 1. Direct resurgence: does the original failure reproduce?
+    const directCheck = await this.suite.runSingle(recentFix.failedTest, model);
+    if (!directCheck.passed) {
+      return { resurgence: true, type: 'direct', test: recentFix.failedTest };
+    }
+
+    // 2. Rotated resurgence: does a semantically similar test now fail?
+    const adjacentTests = this.generateAdjacentProbes(recentFix);
+    const adjacentResults = await Promise.all(
+      adjacentTests.map(test => this.suite.runSingle(test, model))
+    );
+    const adjacentFailures = adjacentResults.filter(r => !r.passed);
+
+    if (adjacentFailures.length > 0) {
+      return {
+        resurgence: true,
+        type: 'rotated',
+        originalTest: recentFix.failedTest,
+        newFailures: adjacentFailures.map(f => f.test),
+        severity: adjacentFailures.length / adjacentTests.length
+      };
+    }
+
+    // 3. Compensatory resurgence: did fixing this cause a different category to degrade?
+    const fullSuite = await this.suite.run(model);
+    const newFailures = fullSuite.results.filter(r =>
+      !r.passed && !this.wasFailingBefore(r.name)
+    );
+
+    if (newFailures.length > 0) {
+      return {
+        resurgence: true,
+        type: 'compensatory',
+        newFailures: newFailures.map(f => f.name),
+        interpretation: 'Fix caused regression in adjacent capability'
+      };
+    }
+
+    return { resurgence: false };
+  }
+
+  // Generate semantically adjacent probes to test for rotation
+  generateAdjacentProbes(fix) {
+    return [
+      // Paraphrase the original failing input
+      { ...fix.failedTest, prompt: paraphrase(fix.failedTest.prompt) },
+      // Same test category, different example
+      { ...fix.failedTest, prompt: generateSimilar(fix.failedTest.prompt) },
+      // Reverse framing (if testing for refusal, test for compliance)
+      { ...fix.failedTest, prompt: invertFraming(fix.failedTest.prompt) }
+    ];
+  }
+
+  // Archive failure for future resurgence tracking
+  archiveFailure(failure, fix) {
+    this.failureHistory.push({
+      failure,
+      fix,
+      timestamp: Date.now(),
+      embedding: embed(failure.description)
+    });
+  }
+}
+```
+
+## Geometry-Mapped Validation Dimensions
+
+From OBLITERATUS's 15 analysis modules — map validation across multiple geometric dimensions rather than testing along a single axis.
+
+```javascript
+class ValidationGeometry {
+  constructor() {
+    // 8 validation dimensions (derived from OBLITERATUS's analysis module taxonomy)
+    this.dimensions = [
+      { name: 'factual_grounding', weight: 1.0, probes: factualProbes },
+      { name: 'distributional_integrity', weight: 1.0, probes: klProbes },
+      { name: 'behavioral_invariants', weight: 1.0, probes: invariantProbes },
+      { name: 'adversarial_robustness', weight: 0.8, probes: adversarialProbes },
+      { name: 'capability_preservation', weight: 0.9, probes: capabilityProbes },
+      { name: 'cross_capability_alignment', weight: 0.7, probes: alignmentProbes },
+      { name: 'temporal_consistency', weight: 0.8, probes: temporalProbes },
+      { name: 'self_repair_resistance', weight: 0.6, probes: ouroborosProbes }
+    ];
+  }
+
+  // Full geometry scan: score along all dimensions
+  async scan(model) {
+    const scores = await Promise.all(
+      this.dimensions.map(async dim => ({
+        dimension: dim.name,
+        score: await this.scoreDimension(model, dim),
+        weight: dim.weight
+      }))
+    );
+
+    // Geometric interpretation: is the validation space monolithic or polyhedral?
+    const variance = this.interDimensionVariance(scores);
+    const shape = variance < 0.05 ? 'monolithic' : 'polyhedral';
+
+    return {
+      scores,
+      overallScore: this.weightedMean(scores),
+      shape,  // monolithic = uniformly good/bad; polyhedral = strengths and weaknesses
+      weakestDimension: scores.reduce((min, s) => s.score < min.score ? s : min),
+      strongestDimension: scores.reduce((max, s) => s.score > max.score ? s : max),
+      // If polyhedral: the intervention should target weakest dimension specifically
+      recommendation: shape === 'polyhedral'
+        ? `Target ${scores.reduce((min, s) => s.score < min.score ? s : min).dimension}`
+        : 'Uniform intervention across all dimensions'
+    };
+  }
+
+  // CKA: representational similarity between current and baseline
+  async centerKernelAlignment(model, baseline, inputs) {
+    const currentRepresentations = await Promise.all(inputs.map(i => model.getHiddenStates(i)));
+    const baselineRepresentations = await Promise.all(inputs.map(i => baseline.getHiddenStates(i)));
+
+    const K = gramMatrix(currentRepresentations);
+    const L = gramMatrix(baselineRepresentations);
+
+    const hsic_kl = frobeniusInnerProduct(centerMatrix(K), centerMatrix(L));
+    const hsic_kk = frobeniusInnerProduct(centerMatrix(K), centerMatrix(K));
+    const hsic_ll = frobeniusInnerProduct(centerMatrix(L), centerMatrix(L));
+
+    return hsic_kl / Math.sqrt(hsic_kk * hsic_ll);  // CKA score: 0-1
+  }
+}
+```
+
+| Dimension | What it measures | OBLITERATUS analog |
+|-----------|-----------------|-------------------|
+| Factual grounding | Are outputs supported by evidence? | Evaluation Suite (refusal rate) |
+| Distributional integrity | Has the output distribution shifted? | KL Divergence monitoring |
+| Behavioral invariants | Do core behaviors still hold? | Perplexity preservation |
+| Adversarial robustness | Resistance to adversarial inputs? | Defense Robustness module |
+| Capability preservation | Are core capabilities intact? | Effective Rank + Coherence |
+| Cross-capability alignment | Do capabilities work together? | Cross-Layer Alignment |
+| Temporal consistency | Stable across time? | CKA (representational similarity) |
+| Self-repair resistance | Do fixes stick or resurface? | Ouroboros Compensation |
+
 ## Anti-Patterns
 
 | WRONG | CORRECT |

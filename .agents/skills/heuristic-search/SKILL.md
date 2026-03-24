@@ -687,3 +687,175 @@ The heuristic search skill connects to the other two QURA skills:
 - **Self-Optimizing Meta-Loop** uses search to navigate the space of possible code mutations
 
 Together: **search** explores → **evolution** diversifies → **meta-loop** verifies.
+
+## Subspace Geometry Analysis (From OBLITERATUS)
+
+OBLITERATUS maps **refusal geometry** across transformer layers — 15 analysis modules characterizing where and how a behavior manifests in activation space. The search analog: characterize the **solution space geometry** before choosing an algorithm.
+
+```javascript
+class SolutionSpaceGeometry {
+  constructor(problem, sampler) {
+    this.problem = problem;
+    this.sampler = sampler;  // Generates random states for geometric analysis
+  }
+
+  // Analyze the shape of the solution space before searching
+  async characterize(sampleSize = 100) {
+    const samples = Array.from({ length: sampleSize }, () => this.sampler.randomState());
+    const costs = samples.map(s => this.problem.cost(s));
+    const heuristics = samples.map(s => this.problem.heuristic(s));
+
+    return {
+      // 1. Landscape ruggedness: how much does cost vary between neighbors?
+      ruggedness: await this.measureRuggedness(samples),
+
+      // 2. Modality: unimodal (one basin) or multimodal (many basins)?
+      modality: this.detectModality(costs),
+
+      // 3. Deceptiveness: does the heuristic mislead? (correlation between h and actual cost-to-go)
+      heuristicQuality: this.correlateHeuristicWithActual(heuristics, costs),
+
+      // 4. Dimensionality: effective dimensions of the search space
+      effectiveDimensions: this.estimateEffectiveDimensions(samples),
+
+      // 5. Connectivity: how well-connected is the feasible region?
+      connectivity: await this.estimateConnectivity(samples),
+
+      // 6. Basin structure: monolithic or polyhedral?
+      basinShape: this.classifyBasinShape(costs)
+    };
+  }
+
+  // Ruggedness: autocorrelation of fitness along random walks
+  async measureRuggedness(samples) {
+    const walkLength = 50;
+    const autocorrelations = [];
+
+    for (let trial = 0; trial < 10; trial++) {
+      let current = samples[Math.floor(Math.random() * samples.length)];
+      const walkCosts = [this.problem.cost(current)];
+
+      for (let step = 0; step < walkLength; step++) {
+        const neighbors = [...this.problem.transitions(current)];
+        if (neighbors.length === 0) break;
+        current = neighbors[Math.floor(Math.random() * neighbors.length)].state;
+        walkCosts.push(this.problem.cost(current));
+      }
+
+      autocorrelations.push(autocorrelation(walkCosts, 1));
+    }
+
+    const meanAC = autocorrelations.reduce((a, b) => a + b, 0) / autocorrelations.length;
+    // High autocorrelation = smooth landscape → hill climbing works
+    // Low autocorrelation = rugged landscape → need SA or tabu search
+    return {
+      autocorrelation: meanAC,
+      classification: meanAC > 0.8 ? 'smooth' : meanAC > 0.4 ? 'moderate' : 'rugged'
+    };
+  }
+
+  // Modality: count basins via random restarts of hill climbing
+  detectModality(costs) {
+    const sorted = [...costs].sort((a, b) => a - b);
+    const threshold = sorted[Math.floor(sorted.length * 0.1)];  // Bottom 10%
+    const basins = costs.filter(c => c <= threshold).length;
+
+    return {
+      estimatedBasins: basins,
+      classification: basins <= 1 ? 'unimodal' : basins <= 5 ? 'oligomodal' : 'multimodal'
+    };
+  }
+
+  // Heuristic quality: does h(s) predict actual distance to goal?
+  correlateHeuristicWithActual(heuristics, costs) {
+    const correlation = pearsonCorrelation(heuristics, costs);
+    return {
+      correlation,
+      quality: correlation > 0.8 ? 'excellent' : correlation > 0.5 ? 'moderate' : 'poor',
+      advisory: correlation < 0.3
+        ? 'Heuristic is misleading — prefer uninformed or local search'
+        : correlation < 0.6
+        ? 'Heuristic gives weak guidance — A* will work but expand many nodes'
+        : 'Heuristic is informative — A* or IDA* recommended'
+    };
+  }
+
+  // Effective dimensionality via PCA on sample states
+  estimateEffectiveDimensions(samples) {
+    const vectors = samples.map(s => stateToVector(s));
+    const { eigenvalues } = pca(vectors);
+    const totalVariance = eigenvalues.reduce((a, b) => a + b, 0);
+    let cumulative = 0;
+    let effectiveDims = 0;
+    for (const ev of eigenvalues) {
+      cumulative += ev;
+      effectiveDims++;
+      if (cumulative / totalVariance >= 0.95) break;  // 95% variance explained
+    }
+    return { effectiveDims, totalDims: vectors[0].length, ratio: effectiveDims / vectors[0].length };
+  }
+
+  // Basin shape: monolithic (one big basin) or polyhedral (many faceted basins)
+  classifyBasinShape(costs) {
+    const variance = statisticalVariance(costs);
+    const kurtosis = excessKurtosis(costs);
+    // High kurtosis = peaked = monolithic basin
+    // Low kurtosis = flat = polyhedral/fragmented basins
+    return {
+      kurtosis,
+      classification: kurtosis > 3 ? 'monolithic' : kurtosis > 0 ? 'mixed' : 'polyhedral'
+    };
+  }
+}
+```
+
+## Geometry-Informed Algorithm Selection
+
+Use the geometric characterization to auto-select the best search algorithm — derived, not hardcoded.
+
+```javascript
+class GeometryInformedSelector {
+  // Maps geometry → recommended algorithm (IARM semantic selection)
+  select(geometry) {
+    const { ruggedness, modality, heuristicQuality, effectiveDimensions, basinShape } = geometry;
+
+    // Decision tree derived from landscape analysis
+    if (ruggedness.classification === 'smooth' && modality.classification === 'unimodal') {
+      if (heuristicQuality.quality === 'excellent') return 'aStar';
+      return 'hillClimbing';
+    }
+
+    if (ruggedness.classification === 'rugged' && modality.classification === 'multimodal') {
+      if (effectiveDimensions.ratio < 0.3) return 'simulatedAnnealing';  // Low-dim rugged → SA
+      return 'tabuSearch';  // High-dim rugged → memory-guided search
+    }
+
+    if (basinShape.classification === 'polyhedral') {
+      return 'alns';  // Polyhedral → adaptive destroy-and-rebuild
+    }
+
+    if (modality.classification === 'oligomodal' && heuristicQuality.quality !== 'poor') {
+      return 'idaStar';  // Few basins + decent heuristic → memory-efficient optimal
+    }
+
+    if (effectiveDimensions.ratio > 0.8) {
+      return 'csp';  // High effective dims → constraint propagation to prune
+    }
+
+    // Default: A* if heuristic is any good, else BFS
+    return heuristicQuality.quality !== 'poor' ? 'aStar' : 'bfs';
+  }
+}
+```
+
+| Geometry | Landscape | Best Algorithm | IARM Meaning |
+|----------|-----------|---------------|-------------|
+| Smooth + unimodal + good heuristic | Single funnel, gradient points down | A* | Informed optimism |
+| Smooth + unimodal + poor heuristic | Single funnel, blind | Hill climbing | Greedy ascent |
+| Rugged + multimodal + low-dim | Many traps, few variables | Simulated annealing | Disciplined chaos |
+| Rugged + multimodal + high-dim | Many traps, many variables | Tabu search | Memory-guided novelty |
+| Polyhedral basins | Faceted, non-convex | ALNS | Adaptive destruction |
+| Oligomodal + decent heuristic | Few basins, some guidance | IDA* | Frugal persistence |
+| High effective dimensionality | Large feasible space | CSP | Constraint narrowing |
+
+**Cross-plane connection**: geometry analysis results feed into hyperswarm144's IARM spreading activation — the geometry characterization activates the Ω₁ (search) plane nodes corresponding to the best-matching algorithm.

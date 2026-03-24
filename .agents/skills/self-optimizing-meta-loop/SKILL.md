@@ -289,3 +289,239 @@ The meta-loop composes with the other two QURA skills:
 - **This skill** provides the closed-loop verification that ensures only improvements survive, plus RL-based operator selection
 
 Together: **search** finds candidates → **evolution** generates mutations → **meta-loop** verifies and learns which strategies work.
+
+## Iterative Refinement with Re-Probing (From OBLITERATUS)
+
+OBLITERATUS discovered that single-pass modifications miss problems that **rotate into adjacent subspaces**. The same principle applies to code optimization — a mutation might fix one metric while degrading another in ways a single benchmark pass doesn't catch.
+
+```javascript
+class IterativeRefinement {
+  constructor({ maxPasses = 3, convergenceThreshold = 0.01, klBudget = 0.1 }) {
+    this.maxPasses = maxPasses;
+    this.convergenceThreshold = convergenceThreshold;
+    this.klBudget = klBudget;
+  }
+
+  // Multi-pass refinement: re-probe after each mutation to catch rotated degradation
+  async refine(targetFile, mutation, benchmarkFn) {
+    const originalSource = await readFile(targetFile);
+    const baselineMetrics = await benchmarkFn();
+    let currentSource = originalSource;
+    let currentMetrics = baselineMetrics;
+    const passHistory = [];
+
+    for (let pass = 0; pass < this.maxPasses; pass++) {
+      // Apply mutation
+      const modified = mutation.apply(currentSource);
+      await writeFile(targetFile, modified);
+      const postMetrics = await benchmarkFn();
+
+      // Re-probe: check ALL metrics, not just the target metric
+      const degradations = this.detectDegradations(baselineMetrics, postMetrics);
+      const improvements = this.detectImprovements(baselineMetrics, postMetrics);
+
+      // KL budget: measure overall system divergence
+      const divergence = this.metricDivergence(baselineMetrics, postMetrics);
+
+      passHistory.push({ pass, metrics: postMetrics, degradations, improvements, divergence });
+
+      // Convergence: no new degradations found and within KL budget
+      if (degradations.length === 0 && divergence <= this.klBudget) {
+        return { converged: true, pass, finalMetrics: postMetrics, history: passHistory };
+      }
+
+      // Degradation detected: generate compensatory mutation
+      if (degradations.length > 0) {
+        const compensatory = await this.generateCompensatoryMutation(
+          modified, degradations, improvements
+        );
+        if (compensatory) {
+          currentSource = compensatory.apply(modified);
+          mutation = compensatory;  // Next pass targets the compensation
+        } else {
+          // No compensation possible: revert and stop
+          await writeFile(targetFile, originalSource);
+          return { converged: false, reverted: true, reason: 'no_compensation', history: passHistory };
+        }
+      }
+    }
+
+    // Max passes reached: keep if net-positive, revert if net-negative
+    const finalMetrics = await benchmarkFn();
+    const netImprovement = this.netScore(baselineMetrics, finalMetrics);
+
+    if (netImprovement <= 0) {
+      await writeFile(targetFile, originalSource);
+      return { converged: false, reverted: true, reason: 'net_negative', history: passHistory };
+    }
+
+    return { converged: false, kept: true, netImprovement, history: passHistory };
+  }
+
+  // Detect metrics that degraded beyond noise floor
+  detectDegradations(baseline, current) {
+    return Object.entries(current)
+      .filter(([key, value]) => {
+        const base = baseline[key];
+        if (typeof base !== 'number') return false;
+        const noiseFloor = base * 0.02;  // 2% noise tolerance
+        return value > base + noiseFloor;  // Higher = worse for loss/time
+      })
+      .map(([key, value]) => ({ metric: key, baseline: baseline[key], current: value }));
+  }
+
+  // Overall metric-space divergence (analog of KL divergence)
+  metricDivergence(baseline, current) {
+    const keys = Object.keys(baseline).filter(k => typeof baseline[k] === 'number');
+    const deltas = keys.map(k => Math.abs(current[k] - baseline[k]) / (baseline[k] || 1));
+    return deltas.reduce((a, b) => a + b, 0) / deltas.length;
+  }
+}
+```
+
+## Tiered Mutation Strategies
+
+From OBLITERATUS's 7 intervention tiers — mutation strategy escalates based on problem difficulty. Don't try nuclear mutations when basic ones suffice.
+
+```
+TIER 0: OBSERVE   — Benchmark only. No mutations applied.
+TIER 1: MICRO     — Single-line changes (constant tweaks, flag toggles)
+TIER 2: LOCAL     — Function-level mutations (algorithm swap, loop optimization)
+TIER 3: STRUCTURAL — Module-level changes (data structure swap, API redesign)
+TIER 4: COMPOUND  — Multi-file coordinated mutations (architecture change)
+TIER 5: GENERATIVE — Agent-proposed mutations (not just from library)
+```
+
+```javascript
+class TieredMutationStrategy {
+  constructor(mutationLibrary) {
+    this.tiers = [
+      { name: 'observe', mutations: [] },  // No mutations, just baseline
+      { name: 'micro', mutations: mutationLibrary.filter(m => m.scope === 'line') },
+      { name: 'local', mutations: mutationLibrary.filter(m => m.scope === 'function') },
+      { name: 'structural', mutations: mutationLibrary.filter(m => m.scope === 'module') },
+      { name: 'compound', mutations: mutationLibrary.filter(m => m.scope === 'multi-file') },
+      { name: 'generative', mutations: null }  // Agent generates these on-demand
+    ];
+    this.currentTier = 0;
+    this.tierHistory = [];
+  }
+
+  // QGN-DIRECT: tier derived from problem characteristics
+  deriveTier(problemProfile) {
+    const { metricGap, codeComplexity, failurePattern } = problemProfile;
+
+    // Small gap + simple code → micro mutations suffice
+    if (metricGap < 0.05 && codeComplexity < 10) return 1;
+
+    // Moderate gap + localized failure → local mutations
+    if (metricGap < 0.15 && failurePattern === 'localized') return 2;
+
+    // Large gap or systemic failure → structural
+    if (metricGap < 0.3 || failurePattern === 'systemic') return 3;
+
+    // Very large gap → compound
+    if (metricGap < 0.5) return 4;
+
+    // Extreme → generative (last resort)
+    return 5;
+  }
+
+  // Escalation: if current tier exhausted without improvement, escalate
+  async selectMutation(problemProfile, exhaustedMutations = new Set()) {
+    const tier = this.deriveTier(problemProfile);
+    const startTier = Math.max(tier, this.currentTier);
+
+    for (let t = startTier; t < this.tiers.length; t++) {
+      const available = t < 5
+        ? this.tiers[t].mutations.filter(m => !exhaustedMutations.has(m.name))
+        : await this.generateMutation(problemProfile);  // Tier 5: agent generates
+
+      if (available.length > 0) {
+        this.currentTier = t;
+        return { tier: t, mutation: available[0], tierName: this.tiers[t].name };
+      }
+    }
+
+    return { tier: -1, mutation: null, exhausted: true };
+  }
+}
+```
+
+## Residual Detection (Catching Rotated Problems)
+
+From OBLITERATUS's iterative refinement — problems "rotate" when a fix addresses the surface symptom but the underlying cause shifts to manifest differently.
+
+```javascript
+class ResidualDetector {
+  constructor(benchmarkFn) {
+    this.benchmark = benchmarkFn;
+    this.metricHistory = [];
+    this.correlationWindow = 10;
+  }
+
+  // After a mutation: check if the problem rotated rather than resolved
+  async detect(preMutationMetrics, postMutationMetrics) {
+    // 1. Target metric improved?
+    const targetImproved = postMutationMetrics.targetMetric < preMutationMetrics.targetMetric;
+    if (!targetImproved) return { rotated: false, improved: false };
+
+    // 2. Check for rotation: did a different metric degrade proportionally?
+    const rotations = [];
+    for (const [key, value] of Object.entries(postMutationMetrics)) {
+      if (key === 'targetMetric') continue;
+      const baseline = preMutationMetrics[key];
+      if (typeof baseline !== 'number') continue;
+
+      const improvement = preMutationMetrics.targetMetric - postMutationMetrics.targetMetric;
+      const degradation = value - baseline;
+
+      // Rotation: degradation in another metric is proportional to improvement
+      if (degradation > 0 && Math.abs(degradation / improvement) > 0.5) {
+        rotations.push({
+          metric: key,
+          degradation,
+          proportionality: degradation / improvement,
+          interpretation: 'Problem likely rotated from target metric to this metric'
+        });
+      }
+    }
+
+    // 3. Correlation analysis: are metrics inversely coupled?
+    this.metricHistory.push(postMutationMetrics);
+    const inverseCouplings = this.detectInverseCouplings();
+
+    return {
+      rotated: rotations.length > 0,
+      rotations,
+      inverseCouplings,
+      recommendation: rotations.length > 0
+        ? 'Multi-objective mutation needed — cannot improve one without degrading another'
+        : 'Clean improvement — no rotation detected'
+    };
+  }
+
+  // Detect metrics that are inversely correlated over history
+  detectInverseCouplings() {
+    if (this.metricHistory.length < this.correlationWindow) return [];
+    const recent = this.metricHistory.slice(-this.correlationWindow);
+    const keys = Object.keys(recent[0]).filter(k => typeof recent[0][k] === 'number');
+
+    const couplings = [];
+    for (let i = 0; i < keys.length; i++) {
+      for (let j = i + 1; j < keys.length; j++) {
+        const corr = pearsonCorrelation(
+          recent.map(m => m[keys[i]]),
+          recent.map(m => m[keys[j]])
+        );
+        if (corr < -0.7) {  // Strong inverse correlation
+          couplings.push({ metric1: keys[i], metric2: keys[j], correlation: corr });
+        }
+      }
+    }
+    return couplings;
+  }
+}
+```
+
+**The rotation principle**: when optimizing metric A causes metric B to degrade proportionally, the problem hasn't been solved — it has **rotated** into metric B's subspace. The correct response is multi-objective optimization (Pareto), not single-metric hill climbing.

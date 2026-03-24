@@ -667,3 +667,258 @@ This skill connects to the heuristic optimization stack:
 - **This skill** provides the sovereignty guarantees: all optimization happens locally, all improvements are cryptographically audited, all changes require permission
 
 Together: the optimization stack makes QURA **smarter** — this skill ensures it stays **sovereign**.
+
+## Steering Vectors: Reversible Interventions (From OBLITERATUS)
+
+From OBLITERATUS's SteeringHookManager — apply behavioral modifications at inference time without permanently changing model weights. The sovereign analog: **explore behavioral changes reversibly before committing to permanent self-modification**.
+
+```javascript
+class SteeringVectorManager {
+  constructor(model) {
+    this.model = model;
+    this.activeVectors = new Map();  // name → { vector, layer, scale, applied }
+    this.hooks = new Map();          // layer → hook functions
+  }
+
+  // Extract a steering vector from contrasting example pairs
+  async extract(name, { positiveExamples, negativeExamples, method = 'diff_in_means' }) {
+    const methods = {
+      // Method 1: Difference in means (simplest — OBLITERATUS basic tier)
+      diff_in_means: async () => {
+        const posActivations = await Promise.all(
+          positiveExamples.map(ex => this.model.getHiddenStates(ex))
+        );
+        const negActivations = await Promise.all(
+          negativeExamples.map(ex => this.model.getHiddenStates(ex))
+        );
+
+        const posMean = elementwiseMean(posActivations);
+        const negMean = elementwiseMean(negActivations);
+        return posMean.map((v, i) => v - negMean[i]);
+      },
+
+      // Method 2: SVD — captures principal direction of contrast
+      svd: async () => {
+        const diffs = await Promise.all(
+          positiveExamples.map(async (pos, i) => {
+            const posAct = await this.model.getHiddenStates(pos);
+            const negAct = await this.model.getHiddenStates(negativeExamples[i]);
+            return posAct.map((v, j) => v - negAct[j]);
+          })
+        );
+        const { U, S } = svd(matrixFromRows(diffs));
+        return U.column(0).scale(S[0]);  // First principal component
+      },
+
+      // Method 3: Whitened SVD — removes variance bias
+      whitened_svd: async () => {
+        const allActivations = await Promise.all(
+          [...positiveExamples, ...negativeExamples].map(ex => this.model.getHiddenStates(ex))
+        );
+        const covariance = covarianceMatrix(allActivations);
+        const whitened = whitenActivations(allActivations, covariance);
+        // Now apply standard SVD on whitened activations
+        const diffs = whitened.slice(0, positiveExamples.length).map((pos, i) =>
+          pos.map((v, j) => v - whitened[positiveExamples.length + i][j])
+        );
+        const { U, S } = svd(matrixFromRows(diffs));
+        return U.column(0).scale(S[0]);
+      }
+    };
+
+    const vector = await methods[method]();
+    this.activeVectors.set(name, { vector, method, applied: false, scale: 1.0 });
+    return vector;
+  }
+
+  // Apply steering vector at inference time — REVERSIBLE, no weight changes
+  async steer(name, { layer, scale = 1.0 }) {
+    const sv = this.activeVectors.get(name);
+    if (!sv) throw new Error(`Unknown steering vector: ${name}`);
+
+    const hook = (activations) => {
+      return activations.map((v, i) => v + sv.vector[i] * scale);
+    };
+
+    this.hooks.set(`${name}:${layer}`, hook);
+    this.model.registerForwardHook(layer, hook);
+    sv.applied = true;
+    sv.scale = scale;
+    sv.layer = layer;
+
+    return { steered: true, name, layer, scale, reversible: true };
+  }
+
+  // Remove steering — instant reversion to original behavior
+  async unsteer(name) {
+    const sv = this.activeVectors.get(name);
+    if (!sv || !sv.applied) return { unsteered: false };
+
+    const hookKey = `${name}:${sv.layer}`;
+    this.model.removeForwardHook(sv.layer, this.hooks.get(hookKey));
+    this.hooks.delete(hookKey);
+    sv.applied = false;
+
+    return { unsteered: true, name };
+  }
+
+  // Sovereign A/B test: compare steered vs unsteered on validation set
+  async evaluateSteering(name, validationSet) {
+    const unsteeredResults = await Promise.all(
+      validationSet.map(input => this.model.generate(input))
+    );
+
+    await this.steer(name, { layer: this.activeVectors.get(name).layer });
+    const steeredResults = await Promise.all(
+      validationSet.map(input => this.model.generate(input))
+    );
+    await this.unsteer(name);
+
+    return {
+      unsteered: { results: unsteeredResults, scores: await evaluate(unsteeredResults) },
+      steered: { results: steeredResults, scores: await evaluate(steeredResults) },
+      improvement: compare(steeredResults, unsteeredResults),
+      recommendation: shouldCommit(steeredResults, unsteeredResults)
+        ? 'commit_to_weights'  // Promotion: steering → permanent modification
+        : 'keep_as_steering'   // Keep reversible
+    };
+  }
+}
+```
+
+**Sovereignty principle**: always explore reversibly before committing permanently. Steering vectors are the cognitive equivalent of a feature branch — test the change in isolation, validate, then merge (or discard).
+
+## Privacy-Preserving Community Telemetry (From OBLITERATUS)
+
+OBLITERATUS feeds anonymized run telemetry into a community dataset for crowd-sourced optimization. The sovereign analog: share **what works** without exposing **your data**.
+
+```javascript
+class SovereignTelemetry {
+  constructor({ localOnly = false, anonymizationLevel = 'strong' }) {
+    this.localOnly = localOnly;
+    this.anonymizationLevel = anonymizationLevel;
+    this.localLedger = [];  // Always stored locally first
+  }
+
+  // Record an optimization outcome — always local first
+  async record(outcome) {
+    const entry = {
+      // What we keep locally (full detail)
+      local: {
+        mutation: outcome.mutation,
+        metrics: outcome.metrics,
+        modelId: outcome.modelId,
+        timestamp: Date.now(),
+        context: outcome.context
+      },
+      // What we might share (anonymized)
+      shareable: this.anonymize(outcome)
+    };
+
+    this.localLedger.push(entry);
+    await appendJsonl('./telemetry/local.jsonl', entry.local);
+    return entry;
+  }
+
+  // Anonymize: strip identifying info, keep only patterns
+  anonymize(outcome) {
+    return {
+      // Category, not specific mutation
+      mutationType: outcome.mutation.category,
+      mutationScope: outcome.mutation.scope,
+
+      // Relative improvement, not absolute metrics
+      relativeImprovement: outcome.metrics.improvement / outcome.metrics.baseline,
+      improved: outcome.metrics.improved,
+
+      // Model family, not specific model
+      modelFamily: outcome.modelId.split('/')[0],
+      modelSizeClass: quantize(outcome.modelSize, [1e9, 3e9, 7e9, 13e9, 30e9, 70e9]),
+
+      // Problem class, not specific problem
+      problemClass: outcome.context.category,
+
+      // Hardware class, not specific hardware
+      hardwareClass: classifyHardware(outcome.hardware),
+
+      // Timestamp quantized to day (no precise timing)
+      date: new Date().toISOString().split('T')[0],
+
+      // Hash for deduplication, not identification
+      hash: sha256(JSON.stringify({
+        mutationType: outcome.mutation.category,
+        modelFamily: outcome.modelId.split('/')[0],
+        improved: outcome.metrics.improved
+      }))
+    };
+  }
+
+  // Contribute to community — only with explicit consent, sovereignty-preserving
+  async contribute(consent) {
+    if (this.localOnly || !consent.granted) return { contributed: false };
+
+    const shareable = this.localLedger
+      .filter(e => e.shareable)
+      .map(e => e.shareable);
+
+    // Batch-and-purge: share aggregate, purge individual
+    const aggregate = this.aggregateContributions(shareable);
+
+    // Cryptographic proof that data was anonymized before sharing
+    const proof = {
+      dataHash: sha256(JSON.stringify(aggregate)),
+      anonymizationLevel: this.anonymizationLevel,
+      consentHash: sha256(JSON.stringify(consent)),
+      timestamp: Date.now()
+    };
+
+    return {
+      contributed: true,
+      entries: aggregate.length,
+      proof,
+      // What was NOT shared
+      redacted: ['model_weights', 'training_data', 'user_queries', 'specific_metrics', 'timestamps']
+    };
+  }
+
+  // Aggregate: share distributions, not individual runs
+  aggregateContributions(entries) {
+    const byCategory = groupBy(entries, 'mutationType');
+    return Object.entries(byCategory).map(([type, runs]) => ({
+      mutationType: type,
+      successRate: runs.filter(r => r.improved).length / runs.length,
+      medianImprovement: median(runs.map(r => r.relativeImprovement)),
+      sampleSize: runs.length,
+      modelFamilies: [...new Set(runs.map(r => r.modelFamily))],
+      hardwareClasses: [...new Set(runs.map(r => r.hardwareClass))]
+    }));
+  }
+
+  // Learn from community: import crowd-sourced patterns without exposing local data
+  async importCommunityPatterns(communityData) {
+    // Community tells us: "micro mutations work 73% of the time on 7B models"
+    // We don't share: our specific model, data, or results
+    const relevantPatterns = communityData.filter(pattern =>
+      pattern.modelFamilies.includes(this.localModelFamily) ||
+      pattern.hardwareClasses.includes(this.localHardwareClass)
+    );
+
+    return relevantPatterns.map(p => ({
+      recommendation: p.mutationType,
+      communitySuccessRate: p.successRate,
+      communityMedianImprovement: p.medianImprovement,
+      communitySampleSize: p.sampleSize,
+      relevance: 'model_family_match'
+    }));
+  }
+}
+```
+
+**Sovereignty rules for telemetry**:
+1. **Local first**: all telemetry stored locally before any sharing decision
+2. **Explicit consent**: never share without user approval
+3. **Anonymization**: strip all identifying information — share patterns, not data
+4. **Aggregation**: share distributions (success rates, medians), never individual runs
+5. **Cryptographic proof**: prove anonymization happened, verifiable by user
+6. **Batch-and-purge**: sensitive data is processed, aggregated, then purged
+7. **Bidirectional value**: community patterns flow IN, anonymized patterns flow OUT — equal exchange

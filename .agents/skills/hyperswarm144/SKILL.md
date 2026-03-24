@@ -523,3 +523,287 @@ How the 5 skills compose through the mesh (`⧉`):
 | Self-modification is unbounded | Senatus quorum (3/5) gates all modifications |
 | Regime changes go undetected | R-squared breakpoint monitoring triggers meta-loop review |
 | One scale of operation | Φ∞ fractal: same SEOVA pattern at system/skill/algorithm/operator levels |
+| Intervention is all-or-nothing | Tiered escalation: probe before excise, steer before modify |
+| Suppressed failures stay suppressed | Ouroboros detection: re-probe after intervention for resurfaced patterns |
+| Modifications are irreversible | Steering vectors: reversible inference-time interventions before permanent changes |
+
+## Tiered Intervention Escalation (From OBLITERATUS)
+
+Cognitive operations escalate through graduated intervention tiers — never jump to destructive modification when reversible exploration suffices. Derived from OBLITERATUS's 7-level abliteration pipeline.
+
+```
+TIER 0: PROBE     — Observe only. Collect activation patterns across all planes.
+TIER 1: STEER     — Reversible. Apply steering vectors at inference (no weight change).
+TIER 2: REFINE    — Light touch. Single-pass projection on identified subspaces.
+TIER 3: SURGICAL  — Targeted. Layer-adaptive, head-level, MoE-aware intervention.
+TIER 4: OPTIMIZE  — Auto-tuned. Bayesian parameter search with KL co-optimization.
+TIER 5: COMPOUND  — Multi-pass. Iterative refinement with re-probing between passes.
+TIER 6: NUCLEAR   — Full rewrite. All techniques + expert transplant + verification.
+```
+
+```javascript
+class TieredIntervention {
+  constructor(lattice, validator) {
+    this.lattice = lattice;
+    this.validator = validator;
+    this.tiers = ['probe', 'steer', 'refine', 'surgical', 'optimize', 'compound', 'nuclear'];
+  }
+
+  // QGN-DIRECT: tier selection derived from problem severity, not predetermined
+  async intervene(problem, context) {
+    const severity = await this.assessSeverity(problem, context);
+    const tier = this.deriveTier(severity);
+
+    for (let t = 0; t <= tier; t++) {
+      const result = await this.executeTier(t, problem, context);
+
+      // Ouroboros check: did the problem resurface or rotate?
+      const reProbe = await this.probe(problem, context);
+      if (reProbe.resolved) return { tier: t, result, escalated: false };
+
+      // Problem rotated into adjacent subspace — escalate
+      if (reProbe.rotated) {
+        problem = reProbe.rotatedProblem;  // Track the mutation
+      }
+    }
+
+    return { tier, result: null, escalated: true, warning: 'Maximum tier reached' };
+  }
+
+  // Severity derived from lattice activation dispersion
+  assessSeverity(problem, context) {
+    const activations = this.lattice.iarm.spreadActivation(problem);
+    const entropy = shannonEntropy(activations.flat());
+    const maxActivation = Math.max(...activations.flat());
+
+    // High entropy + high activation = complex, multi-plane problem = higher tier
+    // Low entropy + low activation = localized, simple = lower tier
+    return { entropy, maxActivation, score: entropy * maxActivation };
+  }
+
+  deriveTier(severity) {
+    // QGN-DIRECT: derive from severity distribution, not hardcoded cutoffs
+    const thresholds = this.tiers.map((_, i) =>
+      QGNDeriver.deriveThreshold(this.recentSeverities, (i + 1) / this.tiers.length)
+    );
+    return thresholds.findIndex(t => severity.score <= t);
+  }
+}
+```
+
+**Key principle**: PROBE before STEER. STEER before MODIFY. MODIFY before REWRITE. Every tier validates before escalating — reversible interventions always precede irreversible ones.
+
+## Ouroboros Compensation (Self-Repair Detection)
+
+From OBLITERATUS's discovery that model guardrails self-repair after removal — the system detects when suppressed behaviors resurface in rotated form.
+
+```javascript
+class OuroborosDetector {
+  constructor(lattice, probeBank) {
+    this.lattice = lattice;
+    this.probeBank = probeBank;  // Bank of diagnostic probes
+    this.interventionHistory = [];
+  }
+
+  // After any intervention: re-probe to check for resurfaced patterns
+  async detectSelfRepair(intervention, context) {
+    const preActivations = intervention.preActivations;
+
+    // Re-probe: run same diagnostic probes post-intervention
+    const postActivations = await this.probe(intervention.target, context);
+
+    // 1. Direct resurgence: same pattern reappears
+    const directMatch = this.cosineSimilarity(
+      preActivations.targetPattern,
+      postActivations.targetPattern
+    );
+
+    // 2. Rotated resurgence: pattern migrates to adjacent subspace
+    const rotatedMatches = await this.scanAdjacentSubspaces(
+      preActivations.targetPattern,
+      postActivations.fullActivations
+    );
+
+    // 3. Compensatory resurgence: different layers compensate
+    const compensatory = this.detectCompensation(
+      intervention.modifiedLayers,
+      postActivations.layerActivations
+    );
+
+    return {
+      selfRepaired: directMatch > 0.7 || rotatedMatches.length > 0 || compensatory.detected,
+      type: directMatch > 0.7 ? 'direct' : rotatedMatches.length > 0 ? 'rotated' : 'compensatory',
+      severity: Math.max(directMatch, ...rotatedMatches.map(m => m.similarity)),
+      recommendation: this.deriveResponse(directMatch, rotatedMatches, compensatory)
+    };
+  }
+
+  // Scan adjacent subspaces for rotated versions of the target pattern
+  async scanAdjacentSubspaces(targetPattern, fullActivations) {
+    const matches = [];
+
+    for (let plane = 0; plane < this.lattice.planes.length; plane++) {
+      const planeActivations = fullActivations[plane];
+
+      // Project target pattern onto plane's principal components
+      const projections = principalComponents(planeActivations, 5);
+      for (const pc of projections) {
+        const similarity = Math.abs(this.cosineSimilarity(targetPattern, pc.direction));
+        if (similarity > 0.5) {
+          matches.push({ plane, component: pc.index, similarity, direction: pc.direction });
+        }
+      }
+    }
+    return matches;
+  }
+
+  deriveResponse(direct, rotated, compensatory) {
+    if (direct > 0.7) return 'escalate_tier';  // Same problem, need stronger intervention
+    if (rotated.length > 0) return 'target_rotated_subspace';  // Chase the rotation
+    if (compensatory.detected) return 'widen_intervention_scope';  // Expand to compensating layers
+    return 'intervention_successful';
+  }
+}
+```
+
+**The Ouroboros principle**: any complex system will attempt to restore equilibrium after perturbation. The conductor must re-probe after every intervention — not just verify the target changed, but verify the system didn't compensate elsewhere.
+
+## Analysis-Informed Auto-Configuration (OBLITERATUS Pipeline)
+
+OBLITERATUS's most powerful pattern: run analysis BEFORE intervention to auto-configure all downstream parameters. Maps directly to QGN-DIRECT.
+
+```
+Standard SEOVA:  Search → Evolve → Optimize → Verify → Act
+Enhanced SEOVA:  Search → ANALYZE → Evolve → Optimize → Verify → Act → RE-PROBE
+                           ↑                                         ↓
+                           └─────── Ouroboros feedback loop ──────────┘
+```
+
+```javascript
+class AnalysisInformedPipeline {
+  constructor(lattice) {
+    this.lattice = lattice;
+    this.analysisModules = [
+      new CrossPlaneAlignment(),     // How does the problem span planes?
+      new ActivationGeometry(),       // Monolithic or polyhedral problem shape?
+      new DefenseRobustness(),        // Will the system self-repair?
+      new CausalTracing(),            // Which components are causally necessary?
+      new ResidualDecomposition(),    // How is the problem distributed across attention/MLP analogs?
+    ];
+  }
+
+  async analyze(problem, context) {
+    const results = await Promise.all(
+      this.analysisModules.map(m => m.analyze(problem, context, this.lattice))
+    );
+
+    // Analysis results auto-configure downstream decisions
+    return {
+      // From CrossPlaneAlignment: which planes to involve
+      activePlanes: results[0].alignedPlanes,
+
+      // From ActivationGeometry: single direction or multi-faceted
+      problemShape: results[1].shape,  // 'monolithic' | 'polyhedral'
+      numDirections: results[1].shape === 'monolithic' ? 1 : results[1].facets,
+
+      // From DefenseRobustness: expect self-repair?
+      expectedSelfRepair: results[2].robustnessScore > 0.6,
+      requiredPasses: results[2].robustnessScore > 0.6 ? 3 : 1,
+
+      // From CausalTracing: which nodes are causally necessary
+      causalNodes: results[3].necessaryNodes,
+
+      // From ResidualDecomposition: intervention targets
+      interventionTargets: results[4].dominantComponents,
+
+      // Derived intervention tier
+      recommendedTier: this.deriveTier(results)
+    };
+  }
+
+  // Enhanced SEOVA with analysis pre-stage
+  async execute(problem, context) {
+    // S: Search — find the problem in the lattice
+    const located = await this.lattice.iarm.reason(problem);
+
+    // A: Analyze — auto-configure everything
+    const config = await this.analyze(problem, context);
+
+    // E: Evolve — generate candidates using analysis-informed parameters
+    const candidates = await this.evolve(located, config);
+
+    // O: Optimize — select best candidate
+    const optimized = await this.optimize(candidates, config);
+
+    // V: Verify — check quality + Ouroboros
+    const verified = await this.verify(optimized, config);
+
+    // Re-probe if self-repair expected
+    if (config.expectedSelfRepair) {
+      for (let pass = 1; pass < config.requiredPasses; pass++) {
+        const reProbe = await this.analyze(problem, context);
+        if (reProbe.problemShape === 'resolved') break;
+        // Problem rotated — re-run with updated config
+        const reCandidates = await this.evolve(located, reProbe);
+        const reOptimized = await this.optimize(reCandidates, reProbe);
+        await this.verify(reOptimized, reProbe);
+      }
+    }
+
+    // A: Act — emit verified result
+    return verified;
+  }
+}
+```
+
+## KL-Budget Constrained Operations
+
+From OBLITERATUS's KL co-optimization — every cognitive operation has a **divergence budget**. If an operation causes the system to diverge too far from its baseline distribution, it partially reverts.
+
+```javascript
+class KLBudgetController {
+  constructor({ budget = 0.1, revertRatio = 0.5 }) {
+    this.budget = budget;           // Maximum acceptable KL divergence
+    this.revertRatio = revertRatio; // How much to revert on budget violation
+    this.baselineDistribution = null;
+  }
+
+  async captureBaseline(lattice) {
+    this.baselineDistribution = await lattice.getActivationDistribution();
+  }
+
+  // After any modification: check KL divergence, partially revert if over budget
+  async enforce(lattice, modification) {
+    const currentDistribution = await lattice.getActivationDistribution();
+    const kl = klDivergence(this.baselineDistribution, currentDistribution);
+
+    if (kl <= this.budget) {
+      return { within_budget: true, kl, budget: this.budget };
+    }
+
+    // Over budget: partially revert the most divergent components
+    const layerKLs = await this.perLayerKL(this.baselineDistribution, currentDistribution);
+    const overBudgetLayers = layerKLs
+      .filter(l => l.kl > this.budget / layerKLs.length)
+      .sort((a, b) => b.kl - a.kl);
+
+    for (const layer of overBudgetLayers) {
+      // Partial reversion: interpolate between modified and original
+      await this.partialRevert(lattice, layer, this.revertRatio);
+    }
+
+    const postRevertKL = klDivergence(this.baselineDistribution, await lattice.getActivationDistribution());
+    return { within_budget: postRevertKL <= this.budget, kl: postRevertKL, reverted: overBudgetLayers.length };
+  }
+
+  // Interpolate: new_value = (1 - ratio) * modified + ratio * original
+  async partialRevert(lattice, layer, ratio) {
+    const original = this.baselineDistribution[layer.id];
+    const current = await lattice.getLayerDistribution(layer.id);
+    const blended = current.map((v, i) => (1 - ratio) * v + ratio * original[i]);
+    await lattice.setLayerDistribution(layer.id, blended);
+  }
+}
+```
+
+**Rule**: no single operation should shift the system's distribution by more than the KL budget. This is the cognitive equivalent of OBLITERATUS's capability preservation — modify behavior while maintaining coherent overall function.
