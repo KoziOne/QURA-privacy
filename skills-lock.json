@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "skills": {
+    "mojo-gpu-fundamentals": {
+      "source": "modular/skills",
+      "sourceType": "github",
+      "computedHash": "44506cec578adb87ec3341139d0df0e100496454d697cb0bc1aa4efd1a818c15"
+    },
+    "mojo-python-interop": {
+      "source": "modular/skills",
+      "sourceType": "github",
+      "computedHash": "6f767edebb2faa7ff0c21cd6d3fdb7e330a1c6da70d004775f6b57a11e7647a7"
+    },
+    "mojo-syntax": {
+      "source": "modular/skills",
+      "sourceType": "github",
+      "computedHash": "df427aef9fee625ba0dedc9178166f9f1cd4d85e425ec0cdde8c30c09f62f067"
+    },
+    "new-modular-project": {
+      "source": "modular/skills",
+      "sourceType": "github",
+      "computedHash": "e6da144a780e2d5d5e914c9fec8124b9dd2acfd9e21e16800686e76107469369"
+    },
+    "heuristic-search": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "0bd56e22454f6901578d7ebba8cd0446063df6cdd48a7a50274e89ccccb89b2d"
+    },
+    "evolutionary-optimization": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "4fa30b7a069c9f01c59311ffee0b3afe653fdad96b20ec4bbe94680d057a682b"
+    },
+    "sovereign-ai-architecture": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "d12346e02340436a41b213c5ed5e32bf10e4bf57eb7128f91a99e4b5234772a1"
+    },
+    "self-validation-assessment": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "896614b46a0a513ef9f3b1662cd9e64f96178a8611946c8977c9dd30d72af7a7"
+    },
+    "hyperswarm144": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "a17aea2d4ae21d276a06d9ab74794180077f1244054ff40436b982c3780f0fc2"
+    },
+    "self-optimizing-meta-loop": {
+      "source": "QURA-privacy/skills",
+      "sourceType": "local",
+      "computedHash": "0b9892e500af5274ae021263e667163467ad22edf2b688b9782f54d62d193073"
+    }
+  }
+}
