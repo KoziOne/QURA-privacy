@@ -807,3 +807,105 @@ class KLBudgetController {
 ```
 
 **Rule**: no single operation should shift the system's distribution by more than the KL budget. This is the cognitive equivalent of OBLITERATUS's capability preservation — modify behavior while maintaining coherent overall function.
+
+## Entanglement Gating: Protect Capability During Modification
+
+Before modifying any lattice component, measure how **entangled** it is with desired behaviors. High entanglement means the "fix" will cause collateral damage to capabilities. From OBLITERATUS's safety-capability entanglement mapping.
+
+```javascript
+class EntanglementGatedModification {
+  constructor(lattice, capabilityProbes) {
+    this.lattice = lattice;
+    this.probes = capabilityProbes;
+    this.entanglementCache = new Map();
+  }
+
+  // Before modifying plane/node: measure capability dependency
+  async gate(targetNode, modification) {
+    const baseline = await this.runCapabilityProbes();
+
+    // Temporarily ablate the target node
+    const savedActivation = this.lattice.getActivation(targetNode);
+    this.lattice.setActivation(targetNode, 0);
+    const ablated = await this.runCapabilityProbes();
+    this.lattice.setActivation(targetNode, savedActivation);
+
+    // Entanglement = fraction of capabilities that degrade
+    const degraded = baseline.perProbe.filter((b, i) =>
+      ablated.perProbe[i].score < b.score * 0.95
+    );
+    const entanglement = degraded.length / baseline.perProbe.length;
+
+    this.entanglementCache.set(targetNode.id, entanglement);
+
+    if (entanglement > 0.4) {
+      // High entanglement: use steering (reversible) instead of modification
+      return { proceed: false, reason: 'high_entanglement', entanglement, alternative: 'use_steering_vector' };
+    }
+
+    if (entanglement > 0.2) {
+      // Moderate: proceed but with extra verification passes
+      return { proceed: true, extraVerification: true, entanglement };
+    }
+
+    return { proceed: true, entanglement };
+  }
+}
+```
+
+**The entanglement principle**: in the 576D lattice, nodes are mesh-connected (`⧉`). Modifying one node propagates through Fibonacci adjacency to affect others. Entanglement gating prevents cascade failures by measuring propagation impact before committing.
+
+## Spectral Certification (BBP Phase Transition)
+
+From OBLITERATUS's random matrix theory — provide **formal mathematical guarantees** that cognitive signals are real, not noise artifacts. Uses the BBP (Baik-Ben Arous-Péché) phase transition as the decision boundary.
+
+```javascript
+class LatticeSpectralCertifier {
+  // Certify that IARM's spreading activation found REAL signal, not noise
+  certify(activationMatrix) {
+    const { singularValues } = svd(activationMatrix);
+    const [m, n] = dimensions(activationMatrix);
+    const gamma = m / n;
+
+    // Marchenko-Pastur noise estimate from bulk of singular values
+    const sorted = [...singularValues].sort((a, b) => a - b);
+    const noiseVar = sorted[Math.floor(sorted.length / 2)] ** 2;
+
+    // BBP threshold: signal must exceed this to be distinguishable from noise
+    const bbpThreshold = noiseVar * (1 + Math.sqrt(gamma)) ** 2;
+
+    const signalSVs = singularValues.filter(sv => sv * sv > bbpThreshold);
+    const noiseSVs = singularValues.filter(sv => sv * sv <= bbpThreshold);
+
+    const level = signalSVs.length === singularValues.length ? 'GREEN'
+      : signalSVs.length > 0 ? 'YELLOW'
+      : 'RED';
+
+    return {
+      level,
+      signalDimensions: signalSVs.length,
+      noiseDimensions: noiseSVs.length,
+      bbpThreshold: Math.sqrt(bbpThreshold),
+      strongestSignal: singularValues[0],
+      signalToNoise: singularValues[0] / Math.sqrt(bbpThreshold),
+      action: {
+        GREEN: 'IARM activation is statistically significant — trust the reasoning path',
+        YELLOW: 'Partial signal detected — increase activation spread iterations or sample more',
+        RED: 'Activation indistinguishable from noise — do not trust this reasoning path'
+      }[level]
+    };
+  }
+}
+```
+
+**Integration with SENTIENT wrapper**: before the SentientWrapper accepts a reasoning result as converged, the spectral certifier verifies that the underlying lattice activations contain real signal. This prevents convergence on noise — the SENTIENT wrapper says "confidence has stabilized" but spectral certification says "that confidence is based on noise, not signal."
+
+```
+SENTIENT Process:
+  1. IARM reasons over lattice → activations
+  2. SpectralCertifier.certify(activations) → GREEN/YELLOW/RED
+  3. If RED: reject result regardless of confidence convergence
+  4. If YELLOW: increase sample count, re-spread, re-certify
+  5. If GREEN: proceed to confidence convergence check
+  6. SentientWrapper.process() → verified output
+```

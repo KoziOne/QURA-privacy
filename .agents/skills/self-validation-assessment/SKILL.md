@@ -860,6 +860,139 @@ class ValidationGeometry {
 | Trust self-modifications blindly | Eval suite gates all modifications |
 | Test once at release | Periodic self-adversarial testing (continuous) |
 
+## Entanglement-Gated Modification (From OBLITERATUS)
+
+OBLITERATUS discovered that refusal signals are often **entangled** with capability signals — removing refusal naively also degrades language ability. The solution: measure entanglement before modifying, and skip high-entanglement targets.
+
+The cognitive analog: before any self-modification, measure how entangled the target behavior is with desired capabilities. High entanglement = the "fix" will cause collateral damage.
+
+```javascript
+class EntanglementGate {
+  constructor({ entanglementThreshold = 0.4, capabilityProbes }) {
+    this.threshold = entanglementThreshold;
+    this.capabilityProbes = capabilityProbes;  // Probes that test desired capabilities
+  }
+
+  // Before modifying component X: measure how much capability depends on X
+  async measure(model, targetComponent, modification) {
+    // 1. Baseline: run capability probes on unmodified model
+    const baselineCapability = await this.runCapabilityProbes(model);
+
+    // 2. Ablate: temporarily zero out the target component
+    const ablated = await model.temporarilyAblate(targetComponent);
+    const ablatedCapability = await this.runCapabilityProbes(ablated);
+    await model.restoreComponent(targetComponent);
+
+    // 3. Entanglement = capability loss when target is removed
+    const entanglement = 1 - (ablatedCapability.score / baselineCapability.score);
+
+    // 4. Specificity: does the modification affect ONLY the target behavior?
+    const modifiedModel = await model.temporarilyApply(modification);
+    const modifiedCapability = await this.runCapabilityProbes(modifiedModel);
+    await model.restoreAll();
+
+    const collateralDamage = 1 - (modifiedCapability.score / baselineCapability.score);
+    const selectivity = entanglement > 0
+      ? 1 - (collateralDamage / entanglement)  // How selective is the modification?
+      : 1.0;
+
+    return {
+      entanglement,       // 0 = fully separable, 1 = completely entangled
+      collateralDamage,   // Actual capability loss from the modification
+      selectivity,        // 1 = perfectly targeted, 0 = destroys everything it touches
+      recommendation: entanglement > this.threshold
+        ? 'skip_or_use_steering'  // Too entangled for permanent modification
+        : selectivity > 0.7
+        ? 'proceed'               // Modification is selective enough
+        : 'refine_modification'   // Modification too broad
+    };
+  }
+
+  async runCapabilityProbes(model) {
+    const results = await Promise.all(
+      this.capabilityProbes.map(probe => probe.run(model))
+    );
+    return {
+      score: results.reduce((s, r) => s + r.score, 0) / results.length,
+      perProbe: results
+    };
+  }
+}
+```
+
+| Entanglement | Selectivity | Action |
+|-------------|-------------|--------|
+| Low (< 0.2) | Any | Safe to modify permanently |
+| Medium (0.2-0.4) | High (> 0.7) | Proceed with monitoring |
+| Medium (0.2-0.4) | Low (< 0.7) | Refine the modification to be more targeted |
+| High (> 0.4) | Any | Use steering vectors (reversible) instead of permanent modification |
+
+**Key insight**: entanglement measurement is the difference between surgical intervention and scorched earth. Always measure before modifying.
+
+## Spectral Certification (BBP Phase Transition — From OBLITERATUS)
+
+OBLITERATUS uses **random matrix theory** to provide formal mathematical guarantees — not just empirical pass/fail. The BBP (Baik-Ben Arous-Péché) phase transition defines whether a signal is statistically distinguishable from noise.
+
+```javascript
+class SpectralCertifier {
+  constructor({ significanceLevel = 0.05 }) {
+    this.significanceLevel = significanceLevel;
+  }
+
+  // Certify whether a validation signal is real or noise
+  certify(observationMatrix, signalDirections) {
+    const { singularValues } = svd(observationMatrix);
+    const [m, n] = [observationMatrix.rows, observationMatrix.cols];
+    const gamma = m / n;  // Aspect ratio
+
+    // BBP threshold: below this, singular values are indistinguishable from noise
+    const noiseVariance = this.estimateNoiseVariance(singularValues);
+    const bbpThreshold = noiseVariance * Math.pow(1 + Math.sqrt(gamma), 2);
+
+    // Classify each signal direction
+    const certifications = signalDirections.map((direction, i) => {
+      const projectedVariance = this.projectOntoDirection(observationMatrix, direction);
+      const ratio = projectedVariance / bbpThreshold;
+
+      if (ratio > 1.5) return { direction: i, level: 'GREEN', ratio, meaning: 'Signal clearly above noise — validated' };
+      if (ratio > 1.0) return { direction: i, level: 'YELLOW', ratio, meaning: 'Signal at noise boundary — uncertain' };
+      return { direction: i, level: 'RED', ratio, meaning: 'Signal indistinguishable from noise — not validated' };
+    });
+
+    return {
+      certifications,
+      overallLevel: certifications.every(c => c.level === 'GREEN') ? 'GREEN'
+        : certifications.some(c => c.level === 'RED') ? 'RED'
+        : 'YELLOW',
+      bbpThreshold,
+      noiseVariance,
+      gamma,
+      interpretation: {
+        GREEN: 'All validation signals are statistically significant — proceed with confidence',
+        YELLOW: 'Some signals are at the noise boundary — increase sample size or re-probe',
+        RED: 'Validation signals are indistinguishable from noise — do not trust these results'
+      }
+    };
+  }
+
+  // Estimate noise variance from the bulk of singular values (Marchenko-Pastur)
+  estimateNoiseVariance(singularValues) {
+    // The bulk of singular values follows Marchenko-Pastur — use median as robust estimator
+    const sorted = [...singularValues].sort((a, b) => a - b);
+    const medianSV = sorted[Math.floor(sorted.length / 2)];
+    return medianSV * medianSV;  // Variance from singular value
+  }
+}
+```
+
+| Certification | Meaning | Action |
+|--------------|---------|--------|
+| **GREEN** | Signal/noise ratio > 1.5 × BBP threshold | Validation is trustworthy — proceed |
+| **YELLOW** | Signal/noise ratio 1.0-1.5 × BBP threshold | Borderline — increase sample size or re-probe |
+| **RED** | Signal/noise ratio < 1.0 × BBP threshold | Validation indistinguishable from noise — reject |
+
+**Why this matters**: empirical validation (pass/fail on test suites) can be fooled by noise. Spectral certification provides a **mathematical guarantee** that the signals you're validating against are real, not artifacts of insufficient sampling.
+
 ## Integration with QURA Skills
 
 This skill connects to the full QURA stack:

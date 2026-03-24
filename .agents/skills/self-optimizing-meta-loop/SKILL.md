@@ -525,3 +525,136 @@ class ResidualDetector {
 ```
 
 **The rotation principle**: when optimizing metric A causes metric B to degrade proportionally, the problem hasn't been solved — it has **rotated** into metric B's subspace. The correct response is multi-objective optimization (Pareto), not single-metric hill climbing.
+
+## Spectral Cascade Convergence (From OBLITERATUS)
+
+OBLITERATUS applies DCT (Discrete Cosine Transform) frequency decomposition to separate **systematic** patterns from **capability-entangled noise**. Applied to the meta-loop: decompose benchmark metric trajectories into frequency components to detect when optimization has truly converged vs. when it's oscillating around a fixed point.
+
+```javascript
+class SpectralCascadeMonitor {
+  constructor({ energyThreshold = 0.01, minHistory = 16 }) {
+    this.energyThreshold = energyThreshold;
+    this.minHistory = minHistory;
+    this.metricHistory = [];
+  }
+
+  // Record metric after each mutation cycle
+  record(metrics) {
+    this.metricHistory.push(metrics);
+  }
+
+  // Spectral convergence: has the optimization settled?
+  analyze() {
+    if (this.metricHistory.length < this.minHistory) {
+      return { converged: false, reason: 'insufficient_history' };
+    }
+
+    const signal = this.metricHistory.map(m => m.primaryMetric);
+
+    // DCT decomposition: separate systematic trend from oscillation
+    const dctCoeffs = dct(signal);
+
+    // Low-frequency components = systematic trend (improvement trajectory)
+    // High-frequency components = oscillation (noise, cycling, plateaus)
+    const totalEnergy = dctCoeffs.reduce((s, c) => s + c * c, 0);
+    const lowFreqEnergy = dctCoeffs.slice(0, 3).reduce((s, c) => s + c * c, 0);
+    const highFreqEnergy = totalEnergy - lowFreqEnergy;
+
+    const residualEnergy = highFreqEnergy / totalEnergy;
+
+    // Convergence signals
+    const trendStrength = lowFreqEnergy / totalEnergy;   // How much is systematic
+    const oscillation = highFreqEnergy / totalEnergy;     // How much is noise
+
+    return {
+      converged: residualEnergy < this.energyThreshold,
+      trendStrength,
+      oscillation,
+      residualEnergy,
+      diagnosis: this.diagnose(trendStrength, oscillation, dctCoeffs),
+      recommendation: this.recommend(trendStrength, oscillation)
+    };
+  }
+
+  diagnose(trend, oscillation, coeffs) {
+    if (trend > 0.9 && oscillation < 0.1)
+      return 'steady_improvement';   // Still getting better — keep going
+    if (trend < 0.3 && oscillation > 0.5)
+      return 'oscillating';          // Cycling between states — stuck
+    if (trend < 0.1 && oscillation < 0.1)
+      return 'converged';            // No movement — optimization complete
+    if (coeffs[0] < 0)
+      return 'degrading';            // DC component negative — getting worse
+    return 'mixed';
+  }
+
+  recommend(trend, oscillation) {
+    if (oscillation > 0.5) return 'switch_to_pareto';       // Oscillation = competing objectives
+    if (trend > 0.8) return 'continue_optimization';         // Strong improvement trend
+    if (trend < 0.2) return 'stop_or_escalate_tier';         // No improvement — try stronger intervention
+    return 'continue_with_monitoring';
+  }
+}
+
+// Discrete Cosine Transform (Type II)
+function dct(signal) {
+  const N = signal.length;
+  return Array.from({ length: N }, (_, k) =>
+    signal.reduce((sum, x, n) =>
+      sum + x * Math.cos(Math.PI * k * (2 * n + 1) / (2 * N)), 0
+    ) * Math.sqrt(2 / N) * (k === 0 ? 1 / Math.sqrt(2) : 1)
+  );
+}
+```
+
+| Diagnosis | Trend | Oscillation | Action |
+|-----------|-------|-------------|--------|
+| `steady_improvement` | > 0.9 | < 0.1 | Continue — optimization is working |
+| `oscillating` | < 0.3 | > 0.5 | Stuck between competing objectives — switch to Pareto multi-objective |
+| `converged` | < 0.1 | < 0.1 | Stop — optimization has completed |
+| `degrading` | DC < 0 | Any | Revert — system is getting worse |
+| `mixed` | 0.2-0.8 | 0.1-0.5 | Continue with monitoring — may need intervention |
+
+**Key insight**: standard convergence detection (e.g., "stop when improvement < ε for k steps") misses oscillatory non-convergence. Spectral analysis distinguishes "stuck oscillating between two states" from "genuinely converged" — a distinction that metric thresholds alone cannot make.
+
+## Entanglement-Aware Mutation Selection
+
+From OBLITERATUS's entanglement gating — before applying a mutation, measure how entangled the target code is with the rest of the system. High-entanglement targets need more careful handling.
+
+```javascript
+class EntanglementAwareMutator {
+  constructor(benchmarkFn) {
+    this.benchmark = benchmarkFn;
+  }
+
+  // Measure: if I modify component X, how much does everything else break?
+  async measureEntanglement(targetFile, componentId) {
+    const baseline = await this.benchmark();
+
+    // Temporarily nullify the target component
+    const original = await readFile(targetFile);
+    const nullified = nullifyComponent(original, componentId);
+    await writeFile(targetFile, nullified);
+    const withoutComponent = await this.benchmark();
+    await writeFile(targetFile, original);
+
+    // Entanglement = how many OTHER metrics degrade when component is removed
+    const degradations = Object.entries(withoutComponent)
+      .filter(([key, val]) => typeof val === 'number' && typeof baseline[key] === 'number')
+      .filter(([key, val]) => val > baseline[key] * 1.05)  // >5% degradation
+      .map(([key]) => key);
+
+    const entanglement = degradations.length / Object.keys(baseline).length;
+
+    return {
+      entanglement,  // 0 = isolated, 1 = everything depends on it
+      affectedMetrics: degradations,
+      recommendation: entanglement > 0.4
+        ? 'use_reversible_mutation'  // High entanglement → steering vector approach
+        : entanglement > 0.2
+        ? 'use_surgical_mutation'    // Moderate → targeted, with extra verification
+        : 'standard_mutation'        // Low → safe to modify freely
+    };
+  }
+}
+```
