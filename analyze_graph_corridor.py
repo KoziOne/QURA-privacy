@@ -93,8 +93,8 @@ N_EDGE_SWAPS_ROUNDS = 200    # rewires; each rewire does ~|E| swaps
 RNG_SEED = 20260524
 
 RADII = np.array([0.25, 0.5, 1.0, 2.0, 3.0, 5.0])
-RAD_COLS = ["n_025cdeg", "n_050cdeg", "n_100cdeg",
-            "n_200cdeg", "n_300cdeg", "n_500cdeg"]
+RAD_COLS = ["n_025cdeg", "n_05deg", "n_10deg",
+            "n_20deg", "n_300cdeg", "n_500cdeg"]
 
 
 def comoving_distance(z: np.ndarray) -> np.ndarray:

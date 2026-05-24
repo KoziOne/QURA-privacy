@@ -1,0 +1,7 @@
+feature,observed_r_vs_abs_resid,test,n_shuffles,empirical_p_two_sided
+neighbor_log_rho_std,0.2803534472422375,permute node densities on fixed graph,2000,0.0005
+neighbor_high_low_pairs,0.2762533149172279,permute node densities on fixed graph,2000,0.0
+corridor_betweenness,-0.029674162380501547,permute node densities on fixed graph,2000,0.2115
+graph_neck_score,0.26728010629374355,permute node densities on fixed graph,2000,0.0
+corridor_betweenness,-0.029674162380501547,degree-preserving edge swap (200 rewires),200,0.72
+graph_neck_score,0.26728010629374355,degree-preserving edge swap (200 rewires),200,0.0
