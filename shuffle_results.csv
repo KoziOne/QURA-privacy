@@ -1,0 +1,6 @@
+feature,observed_pearson_r_vs_abs_resid,n_shuffles,empirical_p_two_sided,test
+rho_10_std,-0.22379182713038442,10000,0.0083,density-tuple scrambling
+abs_grad,0.22088339917612826,10000,0.0082,density-tuple scrambling
+sparse_reconnection,0.01750496666353601,10000,0.8536,density-tuple scrambling
+neck_score,0.19385883309334898,10000,0.0207,density-tuple scrambling
+sparse_reconnection,0.01750496666353601,10000,0.844,corridor rewiring (SR-only permutation)
