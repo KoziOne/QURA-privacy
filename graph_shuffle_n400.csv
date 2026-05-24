@@ -1,0 +1,7 @@
+feature,observed_r,test,n_shuffles,empirical_p
+neighbor_log_rho_std,0.14436199838223593,density permutation on fixed graph,1000,0.004
+neighbor_high_low_pairs,0.03130295199828363,density permutation on fixed graph,1000,0.467
+corridor_betweenness,-0.0901782293188171,density permutation on fixed graph,1000,0.0
+graph_neck_score,0.0450258223542946,density permutation on fixed graph,1000,0.25
+corridor_betweenness,-0.0901782293188171,degree-preserving edge swap (100),100,0.03
+graph_neck_score,0.0450258223542946,degree-preserving edge swap (100),100,0.33
